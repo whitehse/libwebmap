@@ -488,21 +488,28 @@ const cam = {
   targetZoom: 10,
   width: 1,
   height: 1,
-  /** Anchor mercator point kept under cursor during animated zoom. */
-  zoomAnchor: null, // { mx, my, sx, sy } sx/sy in CSS px relative to canvas
+  /** Stable world point under cursor for a zoom gesture. */
+  zoomAnchor: null, // { mx, my, sx, sy }
   minZoom: 7,
   maxZoom: 18,
 };
 
+/** Cached CSS canvas size — never call getBoundingClientRect in the draw loop. */
+const view = { w: 1, h: 1, dpr: 1 };
 let zmin = 8;
 let zmax = 12;
 let lastFrameT = performance.now();
+/** LOD hysteresis: only switch tile z after zoom crosses threshold. */
+let activeTileZ = 10;
+let lastStatusT = 0;
+let zoomGestureActive = false;
+let zoomGestureUntil = 0;
 
 function projectCenter() {
   return lonLatToMerc(cam.lon, cam.lat);
 }
 
-/** Meters per CSS pixel at the given zoom (MapLibre/WebMercator tile size 512/256). */
+/** Meters per CSS pixel at the given zoom (MapLibre/WebMercator tile size 256). */
 function metersPerPixel(zoom = cam.zoom) {
   return (
     (Math.cos((cam.lat * Math.PI) / 180) * 2 * Math.PI * R) /
@@ -510,19 +517,19 @@ function metersPerPixel(zoom = cam.zoom) {
   );
 }
 
-function canvasCssSize() {
+function syncViewSize() {
   const rect = canvas.getBoundingClientRect();
-  return { w: rect.width, h: rect.height };
+  view.w = Math.max(1, rect.width);
+  view.h = Math.max(1, rect.height);
+  view.dpr = devicePixelRatio || 1;
 }
 
-/** CSS-pixel → mercator at current cam. */
+/** CSS-pixel → mercator at given zoom. */
 function screenToMerc(cssX, cssY, zoom = cam.zoom) {
-  const { w, h } = canvasCssSize();
   const [cx, cy] = projectCenter();
-  const mpp = metersPerPixel(zoom) ;
-  // canvas internal size uses DPR; client coords are CSS pixels
-  const mx = cx + (cssX - w / 2) * mpp;
-  const my = cy - (cssY - h / 2) * mpp;
+  const mpp = metersPerPixel(zoom);
+  const mx = cx + (cssX - view.w / 2) * mpp;
+  const my = cy - (cssY - view.h / 2) * mpp;
   return [mx, my];
 }
 
@@ -532,34 +539,61 @@ function setCenterMerc(mx, my) {
   cam.lat = lat;
 }
 
-function updateZoomSmooth(dt) {
+/**
+ * Animate zoom toward target with exponential ease.
+ * Keeps zoomAnchor under the cursor for the whole gesture (MapLibre-style).
+ */
+function updateZoomSmooth(dt, now) {
+  if (zoomGestureActive && now > zoomGestureUntil) {
+    zoomGestureActive = false;
+  }
+
   const dz = cam.targetZoom - cam.zoom;
   if (Math.abs(dz) < 1e-4) {
     cam.zoom = cam.targetZoom;
-    cam.zoomAnchor = null;
+    if (!zoomGestureActive) cam.zoomAnchor = null;
     return;
   }
-  // Exponential ease (~MapLibre feel)
-  const k = 1 - Math.exp(-dt * 10);
-  const prev = cam.zoom;
-  cam.zoom = prev + dz * k;
+
+  // Slightly snappier than before while still smooth (~MapLibre ~12–14).
+  const k = 1 - Math.exp(-dt * 14);
+  cam.zoom += dz * k;
 
   if (cam.zoomAnchor) {
     const { mx, my, sx, sy } = cam.zoomAnchor;
-    // Keep anchor under the same screen point after zoom change.
-    const [cx0, cy0] = projectCenter();
-    // Where anchor would appear after zoom without center adjust:
-    // screen offset from center in CSS: (mx - cx) / mpp
     const mpp = metersPerPixel(cam.zoom);
-    const { w, h } = canvasCssSize();
-    // desired: mx = cx + (sx - w/2) * mpp  =>  cx = mx - (sx - w/2) * mpp
-    const ncx = mx - (sx - w / 2) * mpp;
-    const ncy = my + (sy - h / 2) * mpp;
+    const ncx = mx - (sx - view.w / 2) * mpp;
+    const ncy = my + (sy - view.h / 2) * mpp;
     setCenterMerc(ncx, ncy);
-    void cx0;
-    void cy0;
-    void prev;
   }
+}
+
+/** Mercator → slippy tile x/y at integer zoom. */
+function mercToTileXY(mx, my, z) {
+  const n = 2 ** z;
+  const world = 2 * Math.PI * R;
+  const x = ((mx + Math.PI * R) / world) * n;
+  const y = ((Math.PI * R - my) / world) * n;
+  return [x, y];
+}
+
+/**
+ * Visible tile index range (inclusive) with padding for edge fill.
+ * Returns null if invalid.
+ */
+function visibleTileRange(z, pad = 0.15) {
+  const mpp = metersPerPixel();
+  const [cx, cy] = projectCenter();
+  const halfW = mpp * (view.w / 2) * (1 + pad);
+  const halfH = mpp * (view.h / 2) * (1 + pad);
+  const [x0, y0] = mercToTileXY(cx - halfW, cy + halfH, z); // NW
+  const [x1, y1] = mercToTileXY(cx + halfW, cy - halfH, z); // SE
+  const n = 2 ** z;
+  const minX = Math.max(0, Math.floor(Math.min(x0, x1)));
+  const maxX = Math.min(n - 1, Math.floor(Math.max(x0, x1)));
+  const minY = Math.max(0, Math.floor(Math.min(y0, y1)));
+  const maxY = Math.min(n - 1, Math.floor(Math.max(y0, y1)));
+  return { minX, maxX, minY, maxY };
 }
 
 /* ── GPU setup ─────────────────────────────────────────────────────── */
@@ -623,9 +657,10 @@ async function initGpu() {
   context = canvas.getContext("webgpu");
   const format = navigator.gpu.getPreferredCanvasFormat();
   const resize = () => {
-    const dpr = devicePixelRatio || 1;
-    canvas.width = Math.floor(canvas.clientWidth * dpr);
-    canvas.height = Math.floor(canvas.clientHeight * dpr);
+    syncViewSize();
+    const dpr = view.dpr;
+    canvas.width = Math.floor(view.w * dpr);
+    canvas.height = Math.floor(view.h * dpr);
     cam.width = canvas.width;
     cam.height = canvas.height;
     context.configure({ device, format, alphaMode: "premultiplied" });
@@ -843,55 +878,108 @@ function createMesh(vertBuf, indices, indexCount, meta) {
   };
 }
 
-function selectTileZoom(zoom) {
-  if (!availableZooms.length) return Math.floor(zoom);
-  // Prefer highest tile zoom <= floor(zoom); else lowest available (underzoom).
-  const zWant = Math.floor(zoom);
-  let best = availableZooms[0];
-  for (const z of availableZooms) {
-    if (z <= zWant) best = z;
+/**
+ * Choose basemap tile zoom with hysteresis so crossing an integer zoom
+ * mid-gesture does not thrash between LOD levels (big hitch source).
+ */
+function updateActiveTileZoom(zoom) {
+  const ideal = selectIdealTileZoom(zoom);
+  if (!availableZooms.length) {
+    activeTileZ = ideal;
+    return activeTileZ;
   }
-  // If zooming past max tile, use max (overzoom).
-  if (zWant >= availableZooms[availableZooms.length - 1]) {
-    return availableZooms[availableZooms.length - 1];
+  if (!availableZooms.includes(activeTileZ)) {
+    activeTileZ = ideal;
+    return activeTileZ;
   }
-  return best;
+  // Zooming in: keep coarser tiles until well into the next zoom band.
+  if (ideal > activeTileZ && zoom >= activeTileZ + 0.8) {
+    activeTileZ = ideal;
+  }
+  // Zooming out: overzoom finer tiles a bit before dropping LOD.
+  if (ideal < activeTileZ && zoom <= ideal + 0.2) {
+    activeTileZ = ideal;
+  }
+  return activeTileZ;
 }
 
-function writeUniforms(halfWidthM) {
+/** Scratch uniform buffer (reused — avoids alloc per write). */
+const uniformScratch = new Float32Array(8);
+const halfScratch = new Float32Array(2);
+
+function writeCameraUniforms(halfWidthM) {
   const [cx, cy] = projectCenter();
   const mpp = metersPerPixel();
-  // Project in CSS pixels so 1 CSS px = mpp meters (independent of devicePixelRatio).
-  const { w, h } = canvasCssSize();
-  const sx = 1 / (mpp * (w / 2));
-  const sy = 1 / (mpp * (h / 2));
-  // layout: scale.xy, translate.xy, line_half_m, pad
-  const u = new Float32Array(8);
-  u[0] = sx;
-  u[1] = sy;
-  u[2] = -cx;
-  u[3] = -cy;
-  u[4] = halfWidthM;
-  u[5] = 0;
-  device.queue.writeBuffer(uniformBuf, 0, u);
+  const sx = 1 / (mpp * (view.w / 2));
+  const sy = 1 / (mpp * (view.h / 2));
+  uniformScratch[0] = sx;
+  uniformScratch[1] = sy;
+  uniformScratch[2] = -cx;
+  uniformScratch[3] = -cy;
+  uniformScratch[4] = halfWidthM;
+  uniformScratch[5] = 0;
+  device.queue.writeBuffer(uniformBuf, 0, uniformScratch);
+}
+
+/** Only update line_half_m after camera uniforms are already set. */
+function writeHalfWidth(halfWidthM) {
+  halfScratch[0] = halfWidthM;
+  halfScratch[1] = 0;
+  device.queue.writeBuffer(uniformBuf, 16, halfScratch);
+}
+
+/**
+ * Collect GPU draws for the current viewport.
+ * Frustum-culls tiles and keeps layers pre-sorted at load time.
+ */
+function collectDraws(tileZ) {
+  const draws = [];
+  const range = visibleTileRange(tileZ, 0.2);
+  if (!range) return draws;
+
+  for (let x = range.minX; x <= range.maxX; x++) {
+    for (let y = range.minY; y <= range.maxY; y++) {
+      const layers = tileGpu.get(`${tileZ}/${x}/${y}`);
+      if (!layers) continue;
+      for (let i = 0; i < layers.length; i++) draws.push(layers[i]);
+    }
+  }
+  for (let i = 0; i < overlays.length; i++) draws.push(overlays[i]);
+  // Layers within each tile are pre-sorted; merge only needs a stable sort by order
+  // when multiple tiles interleave. Cheap for the culled set.
+  draws.sort((a, b) => (a.order ?? 50) - (b.order ?? 50));
+  return draws;
+}
+
+/**
+ * Bucket draws by quantized half-width so we write uniforms once per bucket.
+ * Quantize to 0.05m to keep buckets small while allowing zoom animation.
+ */
+function drawHalfWidth(g, mpp) {
+  if (g.kind === "line") {
+    const baseName = g.name.replace(/_casing$/, "");
+    const px = styleLineWidth(baseName, cam.zoom) * (g._widthScale ?? 1);
+    return px * 0.5 * mpp;
+  }
+  if (g.kind === "overlay-line") {
+    return 2.0 * mpp;
+  }
+  return 0;
 }
 
 function frame(now) {
   if (!device) return;
   const dt = Math.min(0.05, (now - lastFrameT) / 1000);
   lastFrameT = now;
-  updateZoomSmooth(dt);
+  updateZoomSmooth(dt, now);
 
-  const tileZ = selectTileZoom(cam.zoom);
-  const draws = [];
-  for (const [key, layers] of tileGpu) {
-    const z = parseInt(key.split("/")[0], 10);
-    if (z !== tileZ) continue;
-    for (const g of layers) draws.push(g);
-  }
-  for (const g of overlays) draws.push(g);
-  draws.sort((a, b) => (a.order ?? 50) - (b.order ?? 50));
+  const tileZ = updateActiveTileZoom(cam.zoom);
+  const draws = collectDraws(tileZ);
+  const mpp = metersPerPixel();
 
+  // Sort into width buckets for fewer GPU uniform updates
+  // (fills first within same order already handled by sort; we re-group by halfM).
+  // Walk in painter order; only change half-width when needed.
   const bg = STYLE.background;
   const enc = device.createCommandEncoder();
   const pass = enc.beginRenderPass({
@@ -908,36 +996,41 @@ function frame(now) {
   pass.setPipeline(pipelineFill);
   pass.setBindGroup(0, bindGroup);
 
-  // Group by half-width to minimize uniform writes
   let lastHalf = NaN;
-  for (const g of draws) {
-    let halfM = 0;
-    if (g.kind === "line") {
-      const baseName = g.name.replace(/_casing$/, "");
-      const px =
-        styleLineWidth(baseName, cam.zoom) * (g._widthScale ?? 1);
-      // full width in CSS px → half-width in merc meters
-      halfM = px * 0.5 * metersPerPixel();
-    } else if (g.kind === "overlay-line") {
-      halfM = 2.0 * metersPerPixel();
-    }
-    if (halfM !== lastHalf) {
-      writeUniforms(halfM);
-      lastHalf = halfM;
+  let cameraWritten = false;
+  for (let i = 0; i < draws.length; i++) {
+    const g = draws[i];
+    const halfM = drawHalfWidth(g, mpp);
+    // Quantize comparison to avoid float thrash
+    const q = Math.round(halfM * 40) / 40;
+    if (!cameraWritten) {
+      writeCameraUniforms(halfM);
+      cameraWritten = true;
+      lastHalf = q;
+    } else if (q !== lastHalf) {
+      writeHalfWidth(halfM);
+      lastHalf = q;
     }
     pass.setVertexBuffer(0, g.vb);
     pass.setIndexBuffer(g.ib, "uint32");
     pass.drawIndexed(g.indexCount);
   }
+  // Clear even if no draws
+  if (!cameraWritten) {
+    writeCameraUniforms(0);
+  }
 
   pass.end();
   device.queue.submit([enc.finish()]);
 
-  // Status line
-  setStatus(
-    `<span class="ok">WebGPU</span> · z ${cam.zoom.toFixed(2)} · tiles z${tileZ} · ` +
-      `${draws.length} layers`
-  );
+  // Throttle DOM status (layout work was stealing frames during zoom)
+  if (now - lastStatusT > 200) {
+    lastStatusT = now;
+    setStatus(
+      `<span class="ok">WebGPU</span> · z ${cam.zoom.toFixed(2)} · tiles z${tileZ} · ` +
+        `${draws.length} draws`
+    );
+  }
 
   requestAnimationFrame(frame);
 }
@@ -1008,6 +1101,8 @@ async function loadTiles(manifest) {
           // skip points
         }
         if (gpuLayers.length) {
+          // Painter order fixed at load so the frame loop only merges tiles.
+          gpuLayers.sort((a, b) => (a.order ?? 50) - (b.order ?? 50));
           tileGpu.set(key, gpuLayers);
           if (!byZoom.has(tile.z)) byZoom.set(tile.z, 0);
           byZoom.set(tile.z, byZoom.get(tile.z) + 1);
@@ -1025,9 +1120,19 @@ async function loadTiles(manifest) {
   cam.minZoom = Math.max(6, zmin - 1);
   // Allow overzoom well past max tile for "closer look"
   cam.maxZoom = Math.max(18, zmax + 6);
+  activeTileZ = selectIdealTileZoom(cam.zoom);
   log(
     `loaded ${loaded}/${manifest.tiles.length} tiles (z ${availableZooms.join(",")})`
   );
+}
+
+function selectIdealTileZoom(zoom) {
+  if (!availableZooms.length) return Math.floor(zoom);
+  let ideal = availableZooms[0];
+  for (const z of availableZooms) {
+    if (z <= zoom + 0.05) ideal = z;
+  }
+  return ideal;
 }
 
 /* ── Overlays ──────────────────────────────────────────────────────── */
@@ -1117,26 +1222,42 @@ canvas.addEventListener(
   "wheel",
   (e) => {
     e.preventDefault();
+    // Use cached view size + offsetLeft/Top-free coords from the event target.
     const rect = canvas.getBoundingClientRect();
+    // Keep view.w/h fresh if the window moved without a resize event.
+    view.w = Math.max(1, rect.width);
+    view.h = Math.max(1, rect.height);
     const sx = e.clientX - rect.left;
     const sy = e.clientY - rect.top;
-    // Capture world point under cursor at current display zoom
-    const [mx, my] = screenToMerc(sx, sy, cam.zoom);
-    cam.zoomAnchor = { mx, my, sx, sy };
 
-    // Smooth, continuous zoom (trackpad-friendly)
-    const speed = 0.0025;
-    const delta = -e.deltaY * speed * (e.deltaMode === 1 ? 20 : 1);
-    // Larger notches for mouse wheels
-    const step =
-      Math.abs(e.deltaY) > 50
-        ? e.deltaY > 0
-          ? -0.35
-          : 0.35
-        : delta;
+    // Stable zoom-around point for the whole gesture (do not re-sample
+    // intermediate animated zoom — that causes hesitation/jitter).
+    const pointerMoved =
+      !cam.zoomAnchor ||
+      Math.hypot(sx - cam.zoomAnchor.sx, sy - cam.zoomAnchor.sy) > 6;
+    if (!zoomGestureActive || pointerMoved || !cam.zoomAnchor) {
+      const [mx, my] = screenToMerc(sx, sy, cam.zoom);
+      cam.zoomAnchor = { mx, my, sx, sy };
+    } else {
+      // Update screen anchor if pointer drifts slightly on trackpad.
+      cam.zoomAnchor.sx = sx;
+      cam.zoomAnchor.sy = sy;
+    }
+    zoomGestureActive = true;
+    zoomGestureUntil = performance.now() + 180;
+
+    // MapLibre-like continuous zoom: scale by wheel delta (no discrete jumps).
+    // deltaMode: 0=pixel, 1=line, 2=page
+    let dy = e.deltaY;
+    if (e.deltaMode === 1) dy *= 16;
+    else if (e.deltaMode === 2) dy *= view.h;
+    // Normalize: ~100px wheel notch ≈ 0.35 zoom; trackpads send small pixels.
+    const step = -dy * 0.0018;
+    // Clamp single-event step so one tick never skips LOD violently
+    const clamped = Math.max(-0.45, Math.min(0.45, step));
     cam.targetZoom = Math.max(
       cam.minZoom,
-      Math.min(cam.maxZoom, cam.targetZoom + step)
+      Math.min(cam.maxZoom, cam.targetZoom + clamped)
     );
   },
   { passive: false }
