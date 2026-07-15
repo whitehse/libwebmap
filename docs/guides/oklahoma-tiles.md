@@ -19,7 +19,8 @@ Tulsa, Wagoner, Okmulgee, Creek, Okfuskee, McIntosh, Muskogee, Seminole, Lincoln
 Combined bbox (W,S,E,N): **-97.15, 34.95, -95.05, 36.35**
 
 Default extract zooms **8–12** (~728 tiles, ~10 MB gzipped-off PBF).  
-Demo defaults to **z8–10** for smaller GPU upload.
+Demo defaults to **z8–12** (~44 MB `.wmap`); the host overzooms smoothly past z12
+to ~z18 with extruded road/water widths.
 
 ## Commands
 
@@ -37,9 +38,9 @@ python3 tools/extract_oklahoma_counties.py \
 ./build/gfvtile2wmap --dir data/oklahoma_counties_pbf \
   -o data/oklahoma_counties_wmap --zmin 8 --zmax 12 --quiet
 
-# 4) Demo subset (z8–10)
+# 4) Demo tiles (z8–12 by default)
 ./tools/prepare_demo_tiles.sh
-# optional denser: ZMAX=11 ./tools/prepare_demo_tiles.sh
+# lighter pack: ZMAX=10 ./tools/prepare_demo_tiles.sh
 
 # 5) Serve demo (Chrome/Edge with WebGPU)
 python3 -m http.server -d demo 8765

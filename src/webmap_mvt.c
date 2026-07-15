@@ -153,34 +153,44 @@ webmap_feature_class_t webmap_mvt_layer_class(const char *name)
 uint32_t webmap_mvt_layer_rgba(const char *name)
 {
     if (!name) {
-        return 0xFFBDC3C7u;
+        return 0xFFD8D2C8u; /* neutral land */
     }
-    /* Shortbread schema (GeoFabrik experimental VT) + OpenMapTiles names */
-    if (strcmp(name, "water") == 0 || strcmp(name, "waterway") == 0 ||
-        strcmp(name, "water_lines") == 0 || strcmp(name, "water_polygons") == 0 ||
+    /*
+     * Shortbread-inspired palette (VersaTiles Neutrino / MapLibre light).
+     * Packed as 0xAABBGGRR (little-endian RGBA bytes in .wmap / WebGPU).
+     */
+    if (strcmp(name, "water") == 0 || strcmp(name, "water_polygons") == 0 ||
         strcmp(name, "ocean") == 0) {
-        return 0xFF3498DBu;
+        return 0xFFDFD3AAu; /* #aad3df water fill */
+    }
+    if (strcmp(name, "waterway") == 0 || strcmp(name, "water_lines") == 0) {
+        return 0xFFF0C8A0u; /* #a0c8f0 rivers / streams */
+    }
+    if (strcmp(name, "land") == 0) {
+        return 0xFFE9EFF2u; /* #f2efe9 cream land */
     }
     if (strcmp(name, "landcover") == 0 || strcmp(name, "landuse") == 0 ||
-        strcmp(name, "park") == 0 || strcmp(name, "land") == 0) {
-        return 0xFF27AE60u;
+        strcmp(name, "park") == 0) {
+        return 0xFFC8F2C4u; /* #c4f2c8 parks / green */
     }
     if (strcmp(name, "building") == 0 || strcmp(name, "buildings") == 0) {
-        return 0xFF7F8C8Du;
+        return 0xFFC6D3DEu; /* #ded3c6 buildings */
     }
     if (strcmp(name, "transportation") == 0 || strcmp(name, "road") == 0 ||
-        strcmp(name, "transportation_name") == 0 ||
         strcmp(name, "highway") == 0 || strcmp(name, "streets") == 0 ||
-        strcmp(name, "street_polygons") == 0 ||
+        strcmp(name, "street_polygons") == 0) {
+        return 0xFFFFFFFFu; /* white road fill */
+    }
+    if (strcmp(name, "transportation_name") == 0 ||
         strcmp(name, "street_labels") == 0) {
-        return 0xFFECF0F1u;
+        return 0xFF6B655Cu; /* muted label ink (if drawn) */
     }
     if (strcmp(name, "boundary") == 0 || strcmp(name, "boundaries") == 0) {
-        return 0xFF95A5A6u;
+        return 0xFFB8AFA4u;
     }
     if (strcmp(name, "pois") == 0 || strcmp(name, "sites") == 0 ||
         strcmp(name, "public_transport") == 0) {
-        return 0xFFF39C12u;
+        return 0xFF5A9FD4u;
     }
     if (strstr(name, "power") || strstr(name, "electric")) {
         return 0xFFE67E22u;
@@ -189,7 +199,7 @@ uint32_t webmap_mvt_layer_rgba(const char *name)
         strstr(name, "telecom")) {
         return 0xFF9B59B6u;
     }
-    return 0xFFBDC3C7u;
+    return 0xFFD8D2C8u;
 }
 
 /* ── Ear-clip triangulation (simple polygons, no holes) ────────────── */

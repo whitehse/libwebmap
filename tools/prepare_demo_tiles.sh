@@ -7,7 +7,8 @@ BUILD="${ROOT}/build"
 PBF="${ROOT}/data/oklahoma_counties_pbf"
 OUT="${ROOT}/demo/tiles"
 ZMIN="${ZMIN:-8}"
-ZMAX="${ZMAX:-10}"
+# z12 enables street-level detail; demo overzooms past this with vector scaling.
+ZMAX="${ZMAX:-12}"
 
 if [[ ! -x "${BUILD}/gfvtile2wmap" ]]; then
   echo "Building gfvtile2wmap..."
