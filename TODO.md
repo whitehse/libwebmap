@@ -1,0 +1,47 @@
+# TODO — libwebmap
+
+## Done
+
+- [x] Scaffold: CMake, pure C11, agent-ready docs, LICENSE
+- [x] Core map context: camera, tile cache, event ring
+- [x] Web Mercator projection + tile id helpers
+- [x] `.wmap` v1 encode/decode + roundtrip tests
+- [x] Dynamic overlays (fiber/electric status classes)
+- [x] Overlay → GPU buffer build (camera-relative mercator)
+- [x] Minimal MVT decoder + synthetic smoke tests
+- [x] `gfvtile2wmap` host utility
+- [x] ADRs including **no Emscripten** (009) and clang WASM (010)
+- [x] Wasm toolchain file + export entry stub
+- [x] **Host WebGPU demo** (`demo/index.html` + `main.js` + WGSL)
+- [x] **Freestanding WASM** with bump allocator + soft math (`wasm/webmap_wasm_rt.c`, `docs/guides/wasm.md`)
+- [x] **Visible tile frustum** from width/height/zoom (`webmap_visible_tile_range`)
+- [x] **Batch directory mode** for `gfvtile2wmap` (`--dir`, `--zmin/max`, `--bbox`)
+- [x] **Polygon ear-clip fill** for MVT polygons
+- [x] **GeoFabrik Oklahoma Shortbread** sample: county-limited extract + fixture + demo tiles
+
+## Medium priority
+
+- [ ] Label / glyph atlas plumbing (or explicit deferral ADR)
+- [ ] Style document (subset of MapLibre style for paint properties)
+- [ ] Overlay spatial index for large feature counts
+- [ ] Integration sketch with netforensics status events
+- [ ] pkg-config + install man page
+- [ ] Fuzz harness for `.wmap` and MVT parsers
+- [ ] Wire WASM exports into demo draw path (currently demo parses `.wmap` in JS; WASM loads for ABI check)
+
+## Low priority
+
+- [ ] Pitch/bearing matrices for non-nadir views
+- [ ] Multiple overlay GPU layers split by feature_class
+- [ ] Shared customer join helper API
+- [ ] Real free-list malloc for long-lived WASM sessions
+
+## Testing gaps
+
+- [x] Fixture Oklahoma Tulsa tile decode (`webmap_fixture_ok`)
+- [x] Frustum multi-tile coverage (`webmap_frustum`)
+- [x] Polygon index count (`webmap_polygon`)
+- [ ] Eviction path under `max_tiles`
+- [ ] Queue overflow under tiny `event_queue_size`
+- [ ] Malformed MVT / truncated `.wmap` rejection cases
+- [ ] Valgrind clean on all tests

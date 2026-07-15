@@ -1,0 +1,10 @@
+/build/
+/build-wasm/
+*.o
+*.a
+.cache/
+# Large GeoFabrik package (~175MB) — download separately
+data/oklahoma-shortbread-1.0.mbtiles
+# Regenerable extracts (use tools/extract_oklahoma_counties.py + gfvtile2wmap)
+data/oklahoma_counties_pbf/
+data/oklahoma_counties_wmap/

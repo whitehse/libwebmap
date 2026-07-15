@@ -1,0 +1,20 @@
+.TH WEBMAP_CREATE 3 "2026-07-15" "libwebmap" "Library Functions"
+.SH NAME
+webmap_create, webmap_create_with_config, webmap_destroy \- create a web map context
+.SH SYNOPSIS
+.nf
+.B #include <webmap.h>
+.PP
+.B webmap_ctx_t *webmap_create(void);
+.B webmap_ctx_t *webmap_create_with_config(const webmap_config_t *cfg);
+.B void webmap_destroy(webmap_ctx_t *ctx);
+.fi
+.SH DESCRIPTION
+Allocate a map context that holds basemap tiles and dynamic overlays for a
+WebGPU-oriented status map. The library performs no I/O; the host feeds
+.B .wmap
+tiles and overlay updates.
+.SH SEE ALSO
+.BR webmap_load_wmap_tile (3),
+.BR webmap_upsert_overlay (3),
+.BR webmap_next_event (3)

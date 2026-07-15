@@ -1,0 +1,120 @@
+cmake_minimum_required(VERSION 3.20)
+project(libwebmap VERSION 0.1.0 LANGUAGES C)
+
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS OFF)
+
+option(WEBMAP_BUILD_TOOLS "Build host utilities (gfvtile2wmap)" ON)
+option(WEBMAP_BUILD_TESTS "Build unit tests" ON)
+option(WEBMAP_BUILD_WASM "Build freestanding WASM module (clang, no Emscripten)" OFF)
+option(WEBMAP_BUILD_FUZZ "Build libFuzzer harness" OFF)
+option(WEBMAP_BUILD_DEMO "Copy WebGPU demo assets into build/demo" ON)
+
+if(NOT MSVC)
+    add_compile_options(-Wall -Wextra -Wpedantic -Werror)
+endif()
+
+# ── Core static library (host / native only) ─────────────────────────
+if(NOT WEBMAP_BUILD_WASM)
+    add_library(webmap STATIC
+        src/webmap.c
+        src/webmap_mvt.c
+    )
+    target_include_directories(webmap PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:include>
+    )
+    target_link_libraries(webmap PUBLIC m)
+endif()
+
+# ── Host tool: GeoFabrik MVT → .wmap ─────────────────────────────────
+if(WEBMAP_BUILD_TOOLS AND NOT WEBMAP_BUILD_WASM)
+    add_executable(gfvtile2wmap tools/gfvtile2wmap/main.c)
+    target_link_libraries(gfvtile2wmap PRIVATE webmap)
+endif()
+
+# ── Tests ────────────────────────────────────────────────────────────
+if(WEBMAP_BUILD_TESTS AND NOT WEBMAP_BUILD_WASM)
+    enable_testing()
+
+    add_executable(webmap_smoke tests/test_webmap_smoke.c)
+    target_link_libraries(webmap_smoke PRIVATE webmap)
+    add_test(NAME webmap_smoke COMMAND webmap_smoke)
+
+    add_executable(webmap_mvt_smoke tests/test_mvt_smoke.c)
+    target_link_libraries(webmap_mvt_smoke PRIVATE webmap)
+    add_test(NAME webmap_mvt_smoke COMMAND webmap_mvt_smoke)
+
+    add_executable(webmap_wmap_roundtrip tests/test_wmap_roundtrip.c)
+    target_link_libraries(webmap_wmap_roundtrip PRIVATE webmap)
+    add_test(NAME webmap_wmap_roundtrip COMMAND webmap_wmap_roundtrip)
+
+    add_executable(webmap_frustum tests/test_frustum.c)
+    target_link_libraries(webmap_frustum PRIVATE webmap)
+    add_test(NAME webmap_frustum COMMAND webmap_frustum)
+
+    add_executable(webmap_polygon tests/test_polygon_fill.c)
+    target_link_libraries(webmap_polygon PRIVATE webmap)
+    add_test(NAME webmap_polygon COMMAND webmap_polygon)
+
+    add_executable(webmap_fixture_ok tests/test_fixture_oklahoma.c)
+    target_link_libraries(webmap_fixture_ok PRIVATE webmap)
+    add_test(NAME webmap_fixture_ok COMMAND webmap_fixture_ok
+             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+endif()
+
+# ── Freestanding WASM module (ADR-009, ADR-010) ──────────────────────
+if(WEBMAP_BUILD_WASM)
+    add_executable(webmap_wasm
+        wasm/webmap_wasm_entry.c
+        wasm/webmap_wasm_rt.c
+        src/webmap.c
+    )
+    target_include_directories(webmap_wasm PRIVATE include)
+    target_compile_definitions(webmap_wasm PRIVATE WEBMAP_WASM_FREESTANDING=1)
+    target_compile_options(webmap_wasm PRIVATE
+        -ffreestanding -fno-builtin -fno-exceptions
+    )
+    target_link_options(webmap_wasm PRIVATE
+        -nostdlib
+        -Wl,--no-entry
+        -Wl,--export-dynamic
+        -Wl,--allow-undefined
+        -Wl,--import-memory
+    )
+    set_target_properties(webmap_wasm PROPERTIES
+        OUTPUT_NAME "webmap"
+        SUFFIX ".wasm"
+    )
+endif()
+
+# ── Demo assets ──────────────────────────────────────────────────────
+if(WEBMAP_BUILD_DEMO AND NOT WEBMAP_BUILD_WASM)
+    add_custom_target(webmap_demo ALL
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/demo
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                ${CMAKE_SOURCE_DIR}/demo ${CMAKE_BINARY_DIR}/demo
+        COMMENT "Copy WebGPU demo to build/demo"
+    )
+endif()
+
+# ── Fuzz (optional) ──────────────────────────────────────────────────
+if(WEBMAP_BUILD_FUZZ)
+    add_executable(webmap_fuzz fuzz/webmap_fuzz.c)
+    target_link_libraries(webmap_fuzz PRIVATE webmap)
+    target_compile_options(webmap_fuzz PRIVATE -fsanitize=fuzzer,address,undefined)
+    target_link_options(webmap_fuzz PRIVATE -fsanitize=fuzzer,address,undefined)
+endif()
+
+include(GNUInstallDirs)
+if(TARGET webmap)
+    install(TARGETS webmap ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+    install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+endif()
+if(TARGET gfvtile2wmap)
+    install(TARGETS gfvtile2wmap RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
+if(TARGET webmap_wasm)
+    install(TARGETS webmap_wasm DESTINATION ${CMAKE_INSTALL_LIBDIR})
+endif()

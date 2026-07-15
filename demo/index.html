@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>libwebmap — WebGPU status map demo</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; }
+    body { margin: 0; background: #0b1220; color: #e8eef7; }
+    header { padding: 0.75rem 1rem; background: #121a2b; border-bottom: 1px solid #243049; }
+    header h1 { margin: 0; font-size: 1.1rem; font-weight: 600; }
+    header p { margin: 0.25rem 0 0; opacity: 0.8; font-size: 0.85rem; }
+    #wrap { display: grid; grid-template-columns: 1fr 280px; height: calc(100vh - 72px); }
+    canvas { width: 100%; height: 100%; display: block; background: #0e1626; touch-action: none; }
+    aside { padding: 1rem; border-left: 1px solid #243049; background: #10182a; font-size: 0.85rem; }
+    aside code { font-size: 0.8rem; }
+    .ok { color: #2ecc71; } .warn { color: #f1c40f; } .err { color: #e74c3c; }
+    #log { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 0.75rem; opacity: 0.9; max-height: 40vh; overflow: auto; }
+    button { margin: 0.25rem 0.25rem 0.25rem 0; padding: 0.4rem 0.7rem; border-radius: 6px; border: 1px solid #3a4d6e; background: #1a2740; color: inherit; cursor: pointer; }
+    button:hover { background: #243454; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>libwebmap WebGPU demo</h1>
+    <p>Rural fiber / electric status map — Oklahoma county basemap (Shortbread → .wmap). No Emscripten.</p>
+  </header>
+  <div id="wrap">
+    <canvas id="c"></canvas>
+    <aside>
+      <div id="status">Initializing…</div>
+      <p><strong>Controls</strong>: drag pan · wheel zoom</p>
+      <button id="btn-fiber">Toggle fiber overlay</button>
+      <button id="btn-power">Toggle power overlay</button>
+      <button id="btn-outage">Simulate outage</button>
+      <h3>Region</h3>
+      <p>Counties: Tulsa, Wagoner, Okmulgee, Creek, Okfuskee, McIntosh, Muskogee, Seminole, Lincoln</p>
+      <p>Source: GeoFabrik experimental <code>oklahoma-shortbread-1.0.mbtiles</code></p>
+      <h3>Log</h3>
+      <div id="log"></div>
+    </aside>
+  </div>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>
