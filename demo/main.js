@@ -18,82 +18,375 @@ function setStatus(html) {
   statusEl.innerHTML = html;
 }
 
-/* ── Shortbread / MapLibre-inspired paint ──────────────────────────── */
+/* ── Shortbread schema style (VersaTiles Colorful) ───────────────────
+ * Layers + `kind` follow https://shortbread-tiles.org/schema/1.0/
+ * Paint defaults from versatiles-org/versatiles-style Colorful.
+ * .wmap layer names are `layer` or `layer/kind` after MVT conversion.
+ */
 
-/** Packed 0xAABBGGRR (little-endian RGBA). */
-const STYLE = {
-  background: { r: 0.949, g: 0.941, b: 0.902, a: 1 }, // #f2efe6
-  // Override baked colors so style can evolve without re-tiling.
-  colors: {
-    land: 0xffe9eff2, // #f2efe9
-    water_polygons: 0xffdfd3aa, // #aad3df
-    water: 0xffdfd3aa,
-    water_lines: 0xffe8c49a, // #9ac4e8 slightly deeper rivers
-    waterway: 0xffe8c49a,
-    streets: 0xffffffff, // #ffffff
-    road: 0xffffffff,
-    transportation: 0xffffffff,
-    highway: 0xffffffff,
-    street_polygons: 0xfff5f5f5,
-    building: 0xffc6d3de, // #ded3c6
-    buildings: 0xffc6d3de,
-    landuse: 0xffc8f2c4, // #c4f2c8
-    landcover: 0xffc8f2c4,
-    park: 0xffc8f2c4,
-    boundary: 0xffb8afa4,
-    boundaries: 0xffb8afa4,
-    public_transport: 0xff5a9fd4,
-    pois: 0xff5a9fd4,
-    sites: 0xff5a9fd4,
-  },
-  /** Screen-space half-width in CSS pixels at reference zoom (scales gently). */
-  lineWidthPx: {
-    streets: 2.4,
-    road: 2.4,
-    transportation: 2.4,
-    highway: 3.2,
-    street_polygons: 4.0,
-    water_lines: 1.6,
-    waterway: 1.6,
-    default: 1.2,
-  },
-  /** Draw priority (lower first). */
-  order: {
-    land: 10,
-    landuse: 20,
-    landcover: 20,
-    park: 20,
-    building: 30,
-    buildings: 30,
-    water_polygons: 40,
-    water: 40,
-    water_lines: 50,
-    waterway: 50,
-    streets: 60,
-    road: 60,
-    transportation: 60,
-    highway: 60,
-    street_polygons: 65,
-    boundary: 70,
-    boundaries: 70,
-    public_transport: 80,
-    overlay: 100,
-  },
+/** #RRGGBB → packed 0xAABBGGRR */
+function hex(rgb, a = 0xff) {
+  const r = (rgb >> 16) & 0xff;
+  const g = (rgb >> 8) & 0xff;
+  const b = rgb & 0xff;
+  return ((a & 0xff) << 24) | (b << 16) | (g << 8) | r;
+}
+
+const C = {
+  land: 0xf9f4ee,
+  water: 0xbeddf3,
+  glacier: 0xffffff,
+  wood: 0x66aa44,
+  grass: 0xd8e8c8,
+  park: 0xd9d9a5,
+  street: 0xffffff,
+  streetbg: 0xcfcdca,
+  motorway: 0xffcc88,
+  motorwaybg: 0xe9ac77,
+  trunk: 0xffeeaa,
+  trunkbg: 0xe9ac77,
+  building: 0xf2eae2,
+  buildingbg: 0xdfdbd7,
+  boundary: 0xa6a6c8,
+  residential: 0xeae6e1,
+  commercial: 0xf7deed,
+  industrial: 0xfff4c2,
+  foot: 0xfbebff,
+  agriculture: 0xf0e7d1,
+  rail: 0xb1bbc4,
+  waste: 0xdbd6bd,
+  burial: 0xdddbca,
+  sand: 0xfafaed,
+  rock: 0xe0e4e5,
+  leisure: 0xe7edde,
+  wetland: 0xd3e6db,
 };
 
+const STYLE = {
+  background: { r: 0xF9 / 255, g: 0xF4 / 255, b: 0xEE / 255, a: 1 },
+};
+
+function splitLayerKind(name) {
+  const i = name.indexOf("/");
+  if (i < 0) return { layer: name, kind: "" };
+  return { layer: name.slice(0, i), kind: name.slice(i + 1) };
+}
+
+/** Interpolate MapLibre-style zoom stops: {z: width, ...} */
+function zoomStops(stops, zoom) {
+  const zs = Object.keys(stops)
+    .map(Number)
+    .sort((a, b) => a - b);
+  if (!zs.length) return 0;
+  if (zoom <= zs[0]) return stops[zs[0]];
+  if (zoom >= zs[zs.length - 1]) return stops[zs[zs.length - 1]];
+  for (let i = 0; i < zs.length - 1; i++) {
+    const z0 = zs[i];
+    const z1 = zs[i + 1];
+    if (zoom >= z0 && zoom <= z1) {
+      const t = (zoom - z0) / (z1 - z0);
+      return stops[z0] + (stops[z1] - stops[z0]) * t;
+    }
+  }
+  return stops[zs[zs.length - 1]];
+}
+
+/**
+ * Line width (full CSS px) + casing ratio by Shortbread street kind.
+ * Stops simplified from VersaTiles Colorful street-* rules.
+ */
+function streetPaint(kind) {
+  const k = kind || "residential";
+  const link = k.endsWith("_link");
+  const base = link ? k.replace(/_link$/, "") : k;
+
+  if (base === "motorway") {
+    return {
+      color: hex(C.motorway),
+      casing: hex(C.motorwaybg),
+      width: { 5: 1, 6: 1, 10: 4, 14: 4, 16: 12, 18: 28 },
+      casingScale: 1.35,
+      order: 68,
+    };
+  }
+  if (base === "trunk" || base === "primary") {
+    return {
+      color: hex(C.trunk),
+      casing: hex(C.trunkbg),
+      width: { 7: 1, 10: 3, 14: 5, 16: 10, 18: 24 },
+      casingScale: 1.35,
+      order: 66,
+    };
+  }
+  if (base === "secondary") {
+    return {
+      color: hex(C.trunk),
+      casing: hex(C.trunkbg),
+      width: { 11: 1, 14: 4, 16: 6, 18: 20 },
+      casingScale: 1.35,
+      order: 65,
+    };
+  }
+  if (
+    base === "tertiary" ||
+    base === "unclassified" ||
+    base === "residential" ||
+    base === "living_street" ||
+    base === "livingstreet" ||
+    base === "pedestrian"
+  ) {
+    return {
+      color: hex(C.street),
+      casing: hex(C.streetbg),
+      width: { 12: 1, 14: 2, 16: 5, 18: 16 },
+      casingScale: 1.4,
+      order: 63,
+    };
+  }
+  if (base === "service" || base === "track") {
+    return {
+      color: hex(C.street),
+      casing: hex(C.streetbg),
+      width: { 14: 1, 16: 3, 18: 10 },
+      casingScale: 1.4,
+      order: 62,
+    };
+  }
+  if (
+    base === "rail" ||
+    base === "narrow_gauge" ||
+    base === "light_rail" ||
+    base === "subway" ||
+    base === "tram" ||
+    base === "monorail"
+  ) {
+    return {
+      color: hex(C.rail),
+      casing: hex(0x8a939c),
+      width: { 8: 1, 14: 1.5, 16: 2, 18: 4 },
+      casingScale: 1.5,
+      order: 61,
+    };
+  }
+  if (base === "runway") {
+    return {
+      color: hex(C.street),
+      casing: hex(C.streetbg),
+      width: { 11: 2, 12: 5, 14: 12, 16: 28 },
+      casingScale: 1.15,
+      order: 64,
+    };
+  }
+  if (base === "taxiway") {
+    return {
+      color: hex(C.street),
+      casing: hex(C.streetbg),
+      width: { 13: 1, 14: 2, 16: 8, 18: 14 },
+      casingScale: 1.2,
+      order: 63,
+    };
+  }
+  if (
+    base === "footway" ||
+    base === "path" ||
+    base === "steps" ||
+    base === "cycleway" ||
+    base === "bridleway"
+  ) {
+    return {
+      color: hex(C.foot),
+      casing: hex(0xe0d0e8),
+      width: { 14: 0.8, 16: 1.5, 18: 3 },
+      casingScale: 1.5,
+      order: 60,
+    };
+  }
+  return {
+    color: hex(C.street),
+    casing: hex(C.streetbg),
+    width: { 12: 1, 14: 2, 16: 4, 18: 12 },
+    casingScale: 1.4,
+    order: 62,
+  };
+}
+
+function landColor(kind) {
+  switch (kind) {
+    case "forest":
+    case "wood":
+      return hex(C.wood);
+    case "grass":
+    case "grassland":
+    case "meadow":
+    case "village_green":
+    case "recreation_ground":
+    case "heath":
+    case "scrub":
+      return hex(C.grass);
+    case "park":
+    case "golf_course":
+      return hex(C.park);
+    case "orchard":
+    case "vineyard":
+    case "farmland":
+    case "farmyard":
+    case "allotments":
+    case "greenhouse_horticulture":
+    case "plant_nursery":
+    case "greenfield":
+      return hex(C.agriculture);
+    case "residential":
+      return hex(C.residential, 0x55);
+    case "commercial":
+    case "retail":
+      return hex(C.commercial, 0x50);
+    case "industrial":
+    case "railway":
+    case "brownfield":
+      return hex(C.industrial, 0x60);
+    case "landfill":
+      return hex(C.waste);
+    case "cemetery":
+    case "grave_yard":
+      return hex(C.burial);
+    case "sand":
+    case "beach":
+      return hex(C.sand);
+    case "bare_rock":
+    case "scree":
+    case "shingle":
+      return hex(C.rock);
+    case "swamp":
+    case "bog":
+    case "string_bog":
+    case "wet_meadow":
+    case "wetland":
+    case "marsh":
+      return hex(C.wetland);
+    default:
+      return hex(0xf4efe6);
+  }
+}
+
 function styleColor(name, baked) {
-  return STYLE.colors[name] ?? baked;
+  const { layer, kind } = splitLayerKind(name);
+  if (layer === "ocean" || layer === "water" || layer === "water_polygons") {
+    return kind === "glacier" ? hex(C.glacier) : hex(C.water);
+  }
+  if (layer === "water_lines" || layer === "waterway") {
+    return kind === "stream" || kind === "ditch"
+      ? hex(0xa8d4f0)
+      : hex(0x9ccbea);
+  }
+  if (
+    layer === "dam_lines" ||
+    layer === "dam_polygons" ||
+    layer === "pier_lines" ||
+    layer === "pier_polygons"
+  ) {
+    return hex(C.land);
+  }
+  if (layer === "land" || layer === "landcover" || layer === "landuse") {
+    return landColor(kind);
+  }
+  if (layer === "building" || layer === "buildings") {
+    return hex(C.building);
+  }
+  if (layer === "bridges" || layer === "bridge") {
+    return hex(C.land, 0xcc);
+  }
+  if (layer === "sites") {
+    return hex(C.leisure, 0xa0);
+  }
+  if (
+    layer === "streets" ||
+    layer === "street_polygons" ||
+    layer === "transportation" ||
+    layer === "road" ||
+    layer === "highway"
+  ) {
+    return streetPaint(kind).color;
+  }
+  if (layer === "boundaries" || layer === "boundary") {
+    return hex(C.boundary);
+  }
+  if (layer === "public_transport" || layer === "pois") {
+    return hex(0x66626a);
+  }
+  return baked;
 }
 
 function styleOrder(name) {
-  return STYLE.order[name] ?? 55;
+  const { layer, kind } = splitLayerKind(name);
+  if (layer === "land" || layer === "landcover" || layer === "landuse") {
+    // darker greens under residential tints
+    if (kind === "forest" || kind === "wood") return 12;
+    if (kind === "residential") return 18;
+    if (kind === "industrial" || kind === "commercial" || kind === "retail")
+      return 17;
+    return 15;
+  }
+  if (layer === "sites") return 22;
+  if (layer === "building" || layer === "buildings") return 30;
+  if (layer === "bridges" || layer === "bridge") return 35;
+  if (layer === "water_polygons" || layer === "water" || layer === "ocean")
+    return 40;
+  if (layer === "water_lines" || layer === "waterway") return 50;
+  if (layer === "dam_lines" || layer === "pier_lines") return 52;
+  if (
+    layer === "streets" ||
+    layer === "street_polygons" ||
+    layer === "transportation" ||
+    layer === "road" ||
+    layer === "highway"
+  ) {
+    return streetPaint(kind).order;
+  }
+  if (layer === "boundaries" || layer === "boundary") return 75;
+  if (layer === "public_transport" || layer === "pois") return 80;
+  if (layer === "overlay") return 100;
+  return 55;
 }
 
 function styleLineWidth(name, zoom) {
-  const base = STYLE.lineWidthPx[name] ?? STYLE.lineWidthPx.default;
-  // Slightly thicker when zoomed in (MapLibre-like).
-  const t = Math.max(0, Math.min(1, (zoom - 9) / 6));
-  return base * (0.85 + t * 0.9);
+  const { layer, kind } = splitLayerKind(name.replace(/_casing$/, ""));
+  if (
+    layer === "streets" ||
+    layer === "street_polygons" ||
+    layer === "transportation" ||
+    layer === "road" ||
+    layer === "highway"
+  ) {
+    return zoomStops(streetPaint(kind).width, zoom);
+  }
+  if (layer === "water_lines" || layer === "waterway") {
+    const k = kind || "river";
+    if (k === "river" || k === "canal") {
+      return zoomStops({ 9: 1.5, 12: 2.5, 14: 4, 16: 7 }, zoom);
+    }
+    return zoomStops({ 12: 0.8, 14: 1.2, 16: 2 }, zoom);
+  }
+  if (layer === "boundaries" || layer === "boundary") {
+    return zoomStops({ 4: 0.5, 8: 1, 12: 1.5 }, zoom);
+  }
+  return zoomStops({ 10: 1, 14: 1.5, 16: 2 }, zoom);
+}
+
+function styleCasing(name) {
+  const { layer, kind } = splitLayerKind(name);
+  if (
+    layer === "streets" ||
+    layer === "street_polygons" ||
+    layer === "transportation" ||
+    layer === "road" ||
+    layer === "highway"
+  ) {
+    return streetPaint(kind);
+  }
+  if (layer === "water_lines" || layer === "waterway") {
+    return { casing: hex(0x8eb8d8), casingScale: 1.4, order: 49 };
+  }
+  return null;
 }
 
 /* ── .wmap parser ──────────────────────────────────────────────────── */
@@ -693,23 +986,15 @@ async function loadTiles(manifest) {
             const g = uploadFill(tile, layer, rgba);
             if (g) gpuLayers.push(g);
           } else if (layer.kind === 1) {
-            const isStreet =
-              layer.name === "streets" ||
-              layer.name === "road" ||
-              layer.name === "transportation" ||
-              layer.name === "highway";
-            if (isStreet) {
-              // Casing (darker, wider) under white road fill — MapLibre-like.
-              const casing = uploadLineExtruded(tile, layer, 0xffc4bfb6);
+            const paint = styleCasing(layer.name);
+            if (paint && paint.casing != null) {
+              // Outline / casing under the road/water fill (MapLibre dual-pass).
+              const casing = uploadLineExtruded(tile, layer, paint.casing);
               if (casing) {
                 casing.name = layer.name + "_casing";
-                casing.order = styleOrder(layer.name) - 1;
-                casing.halfWidthPx =
-                  (STYLE.lineWidthPx[layer.name] ?? STYLE.lineWidthPx.default) *
-                  1.55;
-                // Mark so styleLineWidth uses casing multiplier
+                casing.order = (paint.order ?? styleOrder(layer.name)) - 0.5;
                 casing.kind = "line";
-                casing._widthScale = 1.55;
+                casing._widthScale = paint.casingScale ?? 1.4;
                 gpuLayers.push(casing);
               }
             }

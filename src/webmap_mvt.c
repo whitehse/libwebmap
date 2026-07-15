@@ -137,8 +137,21 @@ static int tile_push_layer(webmap_mvt_tile_t *t, webmap_mvt_layer_t *L)
 
 webmap_feature_class_t webmap_mvt_layer_class(const char *name)
 {
+    char base[64];
+    const char *slash;
+
     if (!name) {
         return WEBMAP_CLASS_BASEMAP;
+    }
+    slash = strchr(name, '/');
+    if (slash) {
+        size_t n = (size_t)(slash - name);
+        if (n >= sizeof(base)) {
+            n = sizeof(base) - 1;
+        }
+        memcpy(base, name, n);
+        base[n] = '\0';
+        name = base;
     }
     if (strstr(name, "power") || strstr(name, "electric")) {
         return WEBMAP_CLASS_POWER_LINE;
@@ -150,56 +163,189 @@ webmap_feature_class_t webmap_mvt_layer_class(const char *name)
     return WEBMAP_CLASS_BASEMAP;
 }
 
+/* Pack #RRGGBB (or #RRGGBBAA) into little-endian 0xAABBGGRR. */
+static uint32_t pack_rgb(unsigned r, unsigned g, unsigned b, unsigned a)
+{
+    return ((uint32_t)(a & 0xFFu) << 24) | ((uint32_t)(b & 0xFFu) << 16) |
+           ((uint32_t)(g & 0xFFu) << 8) | (uint32_t)(r & 0xFFu);
+}
+
+static uint32_t pack_hex6(unsigned rgb)
+{
+    return pack_rgb((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF, 0xFF);
+}
+
+/*
+ * VersaTiles Colorful defaults (shortbread-tiles / versatiles-style), adapted
+ * for Shortbread layer+kind. See https://shortbread-tiles.org/schema/1.0/
+ */
+uint32_t webmap_mvt_feature_rgba(const char *layer, const char *kind)
+{
+    char base_buf[64];
+    char kind_buf[64];
+    const char *base = layer ? layer : "";
+    const char *k = kind ? kind : "";
+
+    /* Strip optional "layer/kind" composite names produced by the decoder. */
+    {
+        const char *slash = strchr(base, '/');
+        if (slash && slash[1] && (!kind || !kind[0])) {
+            size_t n = (size_t)(slash - base);
+            if (n >= sizeof(base_buf)) {
+                n = sizeof(base_buf) - 1;
+            }
+            memcpy(base_buf, base, n);
+            base_buf[n] = '\0';
+            snprintf(kind_buf, sizeof(kind_buf), "%s", slash + 1);
+            base = base_buf;
+            k = kind_buf;
+        }
+    }
+
+    /* ── Water ─────────────────────────────────────────────────────── */
+    if (strcmp(base, "ocean") == 0 || strcmp(base, "water") == 0 ||
+        strcmp(base, "water_polygons") == 0) {
+        if (strcmp(k, "glacier") == 0) {
+            return pack_hex6(0xFFFFFF);
+        }
+        return pack_hex6(0xBEDDF3); /* colorful.water */
+    }
+    if (strcmp(base, "water_lines") == 0 || strcmp(base, "waterway") == 0) {
+        if (strcmp(k, "stream") == 0 || strcmp(k, "ditch") == 0) {
+            return pack_hex6(0xA8D4F0);
+        }
+        return pack_hex6(0x9CCBEA); /* rivers / canals slightly deeper */
+    }
+    if (strcmp(base, "dam_lines") == 0 || strcmp(base, "dam_polygons") == 0 ||
+        strcmp(base, "pier_lines") == 0 || strcmp(base, "pier_polygons") == 0) {
+        return pack_hex6(0xF9F4EE); /* land-like piers/dams */
+    }
+
+    /* ── Land cover / use (Shortbread "land") ──────────────────────── */
+    if (strcmp(base, "land") == 0 || strcmp(base, "landcover") == 0 ||
+        strcmp(base, "landuse") == 0) {
+        if (strcmp(k, "forest") == 0 || strcmp(k, "wood") == 0) {
+            return pack_hex6(0x66AA44);
+        }
+        if (strcmp(k, "grass") == 0 || strcmp(k, "grassland") == 0 ||
+            strcmp(k, "meadow") == 0 || strcmp(k, "village_green") == 0 ||
+            strcmp(k, "recreation_ground") == 0 || strcmp(k, "heath") == 0 ||
+            strcmp(k, "scrub") == 0) {
+            return pack_hex6(0xD8E8C8);
+        }
+        if (strcmp(k, "park") == 0 || strcmp(k, "golf_course") == 0) {
+            return pack_hex6(0xD9D9A5);
+        }
+        if (strcmp(k, "orchard") == 0 || strcmp(k, "vineyard") == 0 ||
+            strcmp(k, "farmland") == 0 || strcmp(k, "farmyard") == 0 ||
+            strcmp(k, "allotments") == 0 ||
+            strcmp(k, "greenhouse_horticulture") == 0 ||
+            strcmp(k, "plant_nursery") == 0 || strcmp(k, "greenfield") == 0) {
+            return pack_hex6(0xF0E7D1);
+        }
+        if (strcmp(k, "residential") == 0) {
+            return pack_rgb(0xEA, 0xE6, 0xE1, 0x55); /* #EAE6E1 ~33% */
+        }
+        if (strcmp(k, "commercial") == 0 || strcmp(k, "retail") == 0) {
+            return pack_rgb(0xF7, 0xDE, 0xED, 0x50);
+        }
+        if (strcmp(k, "industrial") == 0 || strcmp(k, "railway") == 0 ||
+            strcmp(k, "brownfield") == 0) {
+            return pack_rgb(0xFF, 0xF4, 0xC2, 0x60);
+        }
+        if (strcmp(k, "landfill") == 0 || strcmp(k, "waste") == 0) {
+            return pack_hex6(0xDBD6BD);
+        }
+        if (strcmp(k, "cemetery") == 0 || strcmp(k, "grave_yard") == 0) {
+            return pack_hex6(0xDDDBCA);
+        }
+        if (strcmp(k, "sand") == 0 || strcmp(k, "beach") == 0) {
+            return pack_hex6(0xFAFAED);
+        }
+        if (strcmp(k, "bare_rock") == 0 || strcmp(k, "scree") == 0 ||
+            strcmp(k, "shingle") == 0) {
+            return pack_hex6(0xE0E4E5);
+        }
+        if (strcmp(k, "swamp") == 0 || strcmp(k, "bog") == 0 ||
+            strcmp(k, "string_bog") == 0 || strcmp(k, "wet_meadow") == 0 ||
+            strcmp(k, "wetland") == 0 || strcmp(k, "marsh") == 0) {
+            return pack_hex6(0xD3E6DB);
+        }
+        /* bare land polygons still need a soft fill vs. background */
+        return pack_hex6(0xF4EFE6);
+    }
+
+    /* ── Sites / buildings ─────────────────────────────────────────── */
+    if (strcmp(base, "sites") == 0) {
+        if (strcmp(k, "hospital") == 0 || strcmp(k, "clinic") == 0) {
+            return pack_hex6(0xFFDADA);
+        }
+        if (strcmp(k, "school") == 0 || strcmp(k, "college") == 0 ||
+            strcmp(k, "university") == 0 || strcmp(k, "kindergarten") == 0) {
+            return pack_hex6(0xF0EAD8);
+        }
+        if (strcmp(k, "parking") == 0) {
+            return pack_hex6(0xEEEEEE);
+        }
+        return pack_rgb(0xE7, 0xED, 0xDE, 0xA0);
+    }
+    if (strcmp(base, "building") == 0 || strcmp(base, "buildings") == 0) {
+        return pack_hex6(0xF2EAE2);
+    }
+    if (strcmp(base, "bridges") == 0 || strcmp(base, "bridge") == 0) {
+        return pack_rgb(0xF9, 0xF4, 0xEE, 0xCC);
+    }
+
+    /* ── Streets / transport (Shortbread "streets") ────────────────── */
+    if (strcmp(base, "streets") == 0 || strcmp(base, "street_polygons") == 0 ||
+        strcmp(base, "transportation") == 0 || strcmp(base, "road") == 0 ||
+        strcmp(base, "highway") == 0) {
+        if (strcmp(k, "motorway") == 0 || strcmp(k, "motorway_link") == 0) {
+            return pack_hex6(0xFFCC88);
+        }
+        if (strcmp(k, "trunk") == 0 || strcmp(k, "trunk_link") == 0 ||
+            strcmp(k, "primary") == 0 || strcmp(k, "primary_link") == 0 ||
+            strcmp(k, "secondary") == 0 || strcmp(k, "secondary_link") == 0) {
+            return pack_hex6(0xFFEEAA);
+        }
+        if (strcmp(k, "rail") == 0 || strcmp(k, "narrow_gauge") == 0 ||
+            strcmp(k, "light_rail") == 0 || strcmp(k, "subway") == 0 ||
+            strcmp(k, "tram") == 0 || strcmp(k, "monorail") == 0 ||
+            strcmp(k, "funicular") == 0) {
+            return pack_hex6(0xB1BBC4);
+        }
+        if (strcmp(k, "runway") == 0 || strcmp(k, "taxiway") == 0) {
+            return pack_hex6(0xCFCDCA);
+        }
+        if (strcmp(k, "footway") == 0 || strcmp(k, "path") == 0 ||
+            strcmp(k, "steps") == 0 || strcmp(k, "pedestrian") == 0 ||
+            strcmp(k, "cycleway") == 0 || strcmp(k, "bridleway") == 0) {
+            return pack_hex6(0xFBEBFF);
+        }
+        /* tertiary / residential / service / track / living_street / … */
+        return pack_hex6(0xFFFFFF);
+    }
+
+    if (strcmp(base, "boundaries") == 0 || strcmp(base, "boundary") == 0) {
+        return pack_hex6(0xA6A6C8);
+    }
+    if (strcmp(base, "pois") == 0 || strcmp(base, "public_transport") == 0) {
+        return pack_hex6(0x66626A);
+    }
+    if (strstr(base, "power") || strstr(base, "electric")) {
+        return pack_hex6(0xE67E22);
+    }
+    if (strstr(base, "fiber") || strstr(base, "fibre") ||
+        strstr(base, "telecom")) {
+        return pack_hex6(0x9B59B6);
+    }
+
+    return pack_hex6(0xD8D2C8);
+}
+
 uint32_t webmap_mvt_layer_rgba(const char *name)
 {
-    if (!name) {
-        return 0xFFD8D2C8u; /* neutral land */
-    }
-    /*
-     * Shortbread-inspired palette (VersaTiles Neutrino / MapLibre light).
-     * Packed as 0xAABBGGRR (little-endian RGBA bytes in .wmap / WebGPU).
-     */
-    if (strcmp(name, "water") == 0 || strcmp(name, "water_polygons") == 0 ||
-        strcmp(name, "ocean") == 0) {
-        return 0xFFDFD3AAu; /* #aad3df water fill */
-    }
-    if (strcmp(name, "waterway") == 0 || strcmp(name, "water_lines") == 0) {
-        return 0xFFF0C8A0u; /* #a0c8f0 rivers / streams */
-    }
-    if (strcmp(name, "land") == 0) {
-        return 0xFFE9EFF2u; /* #f2efe9 cream land */
-    }
-    if (strcmp(name, "landcover") == 0 || strcmp(name, "landuse") == 0 ||
-        strcmp(name, "park") == 0) {
-        return 0xFFC8F2C4u; /* #c4f2c8 parks / green */
-    }
-    if (strcmp(name, "building") == 0 || strcmp(name, "buildings") == 0) {
-        return 0xFFC6D3DEu; /* #ded3c6 buildings */
-    }
-    if (strcmp(name, "transportation") == 0 || strcmp(name, "road") == 0 ||
-        strcmp(name, "highway") == 0 || strcmp(name, "streets") == 0 ||
-        strcmp(name, "street_polygons") == 0) {
-        return 0xFFFFFFFFu; /* white road fill */
-    }
-    if (strcmp(name, "transportation_name") == 0 ||
-        strcmp(name, "street_labels") == 0) {
-        return 0xFF6B655Cu; /* muted label ink (if drawn) */
-    }
-    if (strcmp(name, "boundary") == 0 || strcmp(name, "boundaries") == 0) {
-        return 0xFFB8AFA4u;
-    }
-    if (strcmp(name, "pois") == 0 || strcmp(name, "sites") == 0 ||
-        strcmp(name, "public_transport") == 0) {
-        return 0xFF5A9FD4u;
-    }
-    if (strstr(name, "power") || strstr(name, "electric")) {
-        return 0xFFE67E22u;
-    }
-    if (strstr(name, "fiber") || strstr(name, "fibre") ||
-        strstr(name, "telecom")) {
-        return 0xFF9B59B6u;
-    }
-    return 0xFFD8D2C8u;
+    return webmap_mvt_feature_rgba(name, NULL);
 }
 
 /* ── Ear-clip triangulation (simple polygons, no holes) ────────────── */
@@ -435,16 +581,125 @@ static int decode_geometry(const uint8_t *data, size_t len,
     return 0;
 }
 
-/* ── Feature / Layer message ───────────────────────────────────────── */
+/* ── Feature / Layer message (tags → Shortbread kind) ──────────────── */
 
-static int parse_feature(const uint8_t *data, size_t len, webmap_mvt_layer_t *L,
-                         uint32_t rgba)
+#define MVT_MAX_KEYS   256
+#define MVT_MAX_VALUES 512
+#define MVT_STR_LEN    64
+
+typedef struct {
+    char keys[MVT_MAX_KEYS][MVT_STR_LEN];
+    size_t n_keys;
+    char values[MVT_MAX_VALUES][MVT_STR_LEN]; /* string forms only */
+    size_t n_values;
+    int kind_key; /* index of "kind" in keys, or -1 */
+} mvt_layer_dict_t;
+
+static void copy_str_cap(char *dst, size_t cap, const uint8_t *src, size_t n)
+{
+    if (n >= cap) {
+        n = cap - 1;
+    }
+    memcpy(dst, src, n);
+    dst[n] = '\0';
+}
+
+static int parse_mvt_value_string(const uint8_t *data, size_t len, char *out,
+                                  size_t out_cap)
+{
+    const uint8_t *p = data;
+    const uint8_t *end = data + len;
+    out[0] = '\0';
+    while (p < end) {
+        uint64_t key, v;
+        int field, wire;
+        if (pb_read_varint(&p, end, &key) != 0) {
+            return -1;
+        }
+        field = (int)(key >> 3);
+        wire = (int)(key & 7);
+        if (field == 1 && wire == 2) { /* string_value */
+            if (pb_read_varint(&p, end, &v) != 0 || p + v > end) {
+                return -1;
+            }
+            copy_str_cap(out, out_cap, p, (size_t)v);
+            return 0;
+        }
+        if (field == 7 && wire == 0) { /* bool_value */
+            if (pb_read_varint(&p, end, &v) != 0) {
+                return -1;
+            }
+            snprintf(out, out_cap, "%s", v ? "true" : "false");
+            return 0;
+        }
+        if ((field == 4 || field == 5 || field == 6) && wire == 0) {
+            if (pb_read_varint(&p, end, &v) != 0) {
+                return -1;
+            }
+            snprintf(out, out_cap, "%llu", (unsigned long long)v);
+            return 0;
+        }
+        if (pb_skip(&p, end, wire) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static webmap_mvt_layer_t *find_or_make_sublayer(webmap_mvt_tile_t *tile,
+                                                 const char *base,
+                                                 const char *kind,
+                                                 uint32_t extent,
+                                                 webmap_mvt_geom_type_t ghint)
+{
+    char name[64];
+    size_t i;
+    webmap_mvt_layer_t L;
+
+    if (kind && kind[0]) {
+        snprintf(name, sizeof(name), "%s/%s", base, kind);
+    } else {
+        snprintf(name, sizeof(name), "%s", base);
+    }
+
+    for (i = 0; i < tile->layer_count; i++) {
+        if (strcmp(tile->layers[i].name, name) == 0) {
+            return &tile->layers[i];
+        }
+    }
+
+    memset(&L, 0, sizeof(L));
+    snprintf(L.name, sizeof(L.name), "%s", name);
+    L.extent = extent;
+    L.geom_type = ghint;
+    if (tile_push_layer(tile, &L) != 0) {
+        return NULL;
+    }
+    return &tile->layers[tile->layer_count - 1];
+}
+
+/**
+ * Parse one MVT feature into the matching kind-sublayer of @a tile.
+ * @a dict supplies key/value tables for tag resolution.
+ */
+static int parse_feature(const uint8_t *data, size_t len,
+                         webmap_mvt_tile_t *tile, const char *layer_name,
+                         uint32_t extent, const mvt_layer_dict_t *dict)
 {
     const uint8_t *p = data;
     const uint8_t *end = data + len;
     const uint8_t *geom = NULL;
     size_t geom_len = 0;
     uint64_t gtype = 0;
+    char kind[MVT_STR_LEN];
+    uint32_t rgba;
+    webmap_mvt_layer_t *L;
+    webmap_mvt_geom_type_t ghint = WEBMAP_MVT_UNKNOWN;
+    uint32_t tag_kv[128];
+    size_t n_tags = 0;
+    size_t t;
+
+    kind[0] = '\0';
 
     while (p < end) {
         uint64_t key, v;
@@ -454,7 +709,30 @@ static int parse_feature(const uint8_t *data, size_t len, webmap_mvt_layer_t *L,
         }
         field = (int)(key >> 3);
         wire = (int)(key & 7);
-        if (field == 3 && wire == 0) { /* type */
+        if (field == 2 && wire == 2) { /* tags (packed) */
+            const uint8_t *tp;
+            const uint8_t *tend;
+            if (pb_read_varint(&p, end, &v) != 0 || p + v > end) {
+                return -1;
+            }
+            tp = p;
+            tend = p + (size_t)v;
+            p = tend;
+            while (tp < tend && n_tags + 1 < 128) {
+                uint64_t tv;
+                if (pb_read_varint(&tp, tend, &tv) != 0) {
+                    break;
+                }
+                tag_kv[n_tags++] = (uint32_t)tv;
+            }
+        } else if (field == 2 && wire == 0) { /* tags (unpacked) */
+            if (pb_read_varint(&p, end, &v) != 0) {
+                return -1;
+            }
+            if (n_tags < 128) {
+                tag_kv[n_tags++] = (uint32_t)v;
+            }
+        } else if (field == 3 && wire == 0) { /* type */
             if (pb_read_varint(&p, end, &gtype) != 0) {
                 return -1;
             }
@@ -475,13 +753,36 @@ static int parse_feature(const uint8_t *data, size_t len, webmap_mvt_layer_t *L,
         }
     }
 
-    if (gtype == 1) {
-        L->geom_type = WEBMAP_MVT_POINT;
-    } else if (gtype == 2) {
-        L->geom_type = WEBMAP_MVT_LINE;
-    } else if (gtype == 3) {
-        L->geom_type = WEBMAP_MVT_POLYGON;
+    /* Resolve kind from tags */
+    if (dict && dict->kind_key >= 0) {
+        for (t = 0; t + 1 < n_tags; t += 2) {
+            if ((int)tag_kv[t] == dict->kind_key &&
+                tag_kv[t + 1] < dict->n_values) {
+                snprintf(kind, sizeof(kind), "%s",
+                         dict->values[tag_kv[t + 1]]);
+                break;
+            }
+        }
     }
+
+    if (gtype == 1) {
+        ghint = WEBMAP_MVT_POINT;
+    } else if (gtype == 2) {
+        ghint = WEBMAP_MVT_LINE;
+    } else if (gtype == 3) {
+        ghint = WEBMAP_MVT_POLYGON;
+    }
+
+    L = find_or_make_sublayer(tile, layer_name, kind[0] ? kind : NULL, extent,
+                              ghint);
+    if (!L) {
+        return -1;
+    }
+    if (L->geom_type == WEBMAP_MVT_UNKNOWN) {
+        L->geom_type = ghint;
+    }
+
+    rgba = webmap_mvt_feature_rgba(layer_name, kind[0] ? kind : NULL);
 
     if (geom && geom_len) {
         return decode_geometry(geom, geom_len, L, rgba);
@@ -493,15 +794,17 @@ static int parse_layer(const uint8_t *data, size_t len, webmap_mvt_tile_t *tile)
 {
     const uint8_t *p = data;
     const uint8_t *end = data + len;
-    webmap_mvt_layer_t L;
-    uint32_t rgba;
-    uint64_t extent = WEBMAP_DEFAULT_EXTENT;
+    char layer_name[64];
+    uint32_t extent = WEBMAP_DEFAULT_EXTENT;
+    mvt_layer_dict_t dict;
+    size_t start_layers;
 
-    memset(&L, 0, sizeof(L));
-    snprintf(L.name, sizeof(L.name), "layer");
-    L.extent = WEBMAP_DEFAULT_EXTENT;
+    snprintf(layer_name, sizeof(layer_name), "layer");
+    memset(&dict, 0, sizeof(dict));
+    dict.kind_key = -1;
+    start_layers = tile->layer_count;
 
-    /* First pass: name + extent */
+    /* First pass: name, extent, keys, values */
     p = data;
     while (p < end) {
         uint64_t key, v;
@@ -512,26 +815,42 @@ static int parse_layer(const uint8_t *data, size_t len, webmap_mvt_tile_t *tile)
         field = (int)(key >> 3);
         wire = (int)(key & 7);
         if (field == 1 && wire == 2) { /* name */
-            if (pb_read_varint(&p, end, &v) != 0) {
+            if (pb_read_varint(&p, end, &v) != 0 || p + v > end) {
                 return -1;
             }
-            if (p + v > end) {
+            copy_str_cap(layer_name, sizeof(layer_name), p, (size_t)v);
+            p += (size_t)v;
+        } else if (field == 3 && wire == 2) { /* keys */
+            if (pb_read_varint(&p, end, &v) != 0 || p + v > end) {
                 return -1;
             }
-            {
-                size_t n = (size_t)v;
-                if (n >= sizeof(L.name)) {
-                    n = sizeof(L.name) - 1;
+            if (dict.n_keys < MVT_MAX_KEYS) {
+                copy_str_cap(dict.keys[dict.n_keys], MVT_STR_LEN, p,
+                             (size_t)v);
+                if (strcmp(dict.keys[dict.n_keys], "kind") == 0) {
+                    dict.kind_key = (int)dict.n_keys;
                 }
-                memcpy(L.name, p, n);
-                L.name[n] = '\0';
+                dict.n_keys++;
+            }
+            p += (size_t)v;
+        } else if (field == 4 && wire == 2) { /* values */
+            if (pb_read_varint(&p, end, &v) != 0 || p + v > end) {
+                return -1;
+            }
+            if (dict.n_values < MVT_MAX_VALUES) {
+                if (parse_mvt_value_string(p, (size_t)v,
+                                           dict.values[dict.n_values],
+                                           MVT_STR_LEN) != 0) {
+                    dict.values[dict.n_values][0] = '\0';
+                }
+                dict.n_values++;
             }
             p += (size_t)v;
         } else if (field == 5 && wire == 0) { /* extent */
-            if (pb_read_varint(&p, end, &extent) != 0) {
+            if (pb_read_varint(&p, end, &v) != 0) {
                 return -1;
             }
-            L.extent = (uint32_t)extent;
+            extent = (uint32_t)v;
         } else {
             if (pb_skip(&p, end, wire) != 0) {
                 return -1;
@@ -539,9 +858,7 @@ static int parse_layer(const uint8_t *data, size_t len, webmap_mvt_tile_t *tile)
         }
     }
 
-    rgba = webmap_mvt_layer_rgba(L.name);
-
-    /* Second pass: features */
+    /* Second pass: features → kind sublayers */
     p = data;
     while (p < end) {
         uint64_t key, v;
@@ -552,36 +869,43 @@ static int parse_layer(const uint8_t *data, size_t len, webmap_mvt_tile_t *tile)
         field = (int)(key >> 3);
         wire = (int)(key & 7);
         if (field == 2 && wire == 2) { /* feature */
-            if (pb_read_varint(&p, end, &v) != 0) {
+            if (pb_read_varint(&p, end, &v) != 0 || p + v > end) {
                 return -1;
             }
-            if (p + v > end) {
-                return -1;
-            }
-            if (parse_feature(p, (size_t)v, &L, rgba) != 0) {
-                /* tolerate bad feature */
-            }
+            (void)parse_feature(p, (size_t)v, tile, layer_name, extent, &dict);
             p += (size_t)v;
         } else {
             if (pb_skip(&p, end, wire) != 0) {
-                webmap_mvt_tile_free(tile);
-                free(L.vertices);
-                free(L.indices);
+                /* drop any partial sublayers from this layer */
+                while (tile->layer_count > start_layers) {
+                    webmap_mvt_layer_t *L =
+                        &tile->layers[tile->layer_count - 1];
+                    free(L->vertices);
+                    free(L->indices);
+                    tile->layer_count--;
+                }
                 return -1;
             }
         }
     }
 
-    if (L.vertex_count == 0) {
-        free(L.vertices);
-        free(L.indices);
-        return 0;
-    }
-
-    if (tile_push_layer(tile, &L) != 0) {
-        free(L.vertices);
-        free(L.indices);
-        return -1;
+    /* Drop empty sublayers created without geometry */
+    {
+        size_t i = start_layers;
+        while (i < tile->layer_count) {
+            webmap_mvt_layer_t *L = &tile->layers[i];
+            if (L->vertex_count == 0) {
+                free(L->vertices);
+                free(L->indices);
+                if (i + 1 < tile->layer_count) {
+                    memmove(L, L + 1,
+                            (tile->layer_count - i - 1) * sizeof(*L));
+                }
+                tile->layer_count--;
+                continue;
+            }
+            i++;
+        }
     }
     return 0;
 }

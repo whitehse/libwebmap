@@ -56,8 +56,18 @@ void webmap_mvt_tile_free(webmap_mvt_tile_t *tile);
  */
 webmap_feature_class_t webmap_mvt_layer_class(const char *name);
 
-/** Default basemap color for a layer name (RGBA packed). */
+/**
+ * Default basemap color for a Shortbread/OpenMapTiles layer name (RGBA packed).
+ * Prefer webmap_mvt_feature_rgba when feature `kind` is available.
+ */
 uint32_t webmap_mvt_layer_rgba(const char *name);
+
+/**
+ * Shortbread-aware paint color for a layer + feature `kind` property
+ * (VersaTiles Colorful palette). `kind` may be NULL.
+ * Packed as 0xAABBGGRR.
+ */
+uint32_t webmap_mvt_feature_rgba(const char *layer, const char *kind);
 
 #ifdef __cplusplus
 }

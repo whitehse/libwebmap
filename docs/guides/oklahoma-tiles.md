@@ -47,3 +47,13 @@ python3 -m http.server -d demo 8765
 ```
 
 Fixture for CI: `fixtures/tulsa_z10/238_401.pbf` (single Tulsa-area tile).
+
+## Shortbread styling
+
+The MVT decoder reads each feature’s `kind` tag (and other keys) and emits
+`.wmap` layers named `layer/kind` (e.g. `streets/motorway`, `land/forest`).
+Paint colors use a **VersaTiles Colorful**-inspired palette keyed by layer +
+kind; the WebGPU demo also applies zoom-scaled road casings/widths by kind.
+
+Schema reference: <https://shortbread-tiles.org/schema/1.0/>  
+Style inspiration: [versatiles-style Colorful](https://github.com/versatiles-org/versatiles-style)
