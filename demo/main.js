@@ -803,7 +803,8 @@ function uploadLineExtruded(tile, layer, rgba) {
     name: layer.name,
     kind: "line",
     order: styleOrder(layer.name),
-    halfWidthPx: STYLE.lineWidthPx[layer.name] ?? STYLE.lineWidthPx.default,
+    // Width applied at draw time via styleLineWidth() + _widthScale.
+    halfWidthPx: styleLineWidth(layer.name, 12),
     z: tile.z,
     x: tile.x,
     y: tile.y,
