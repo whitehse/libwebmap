@@ -8,3 +8,13 @@ data/oklahoma-shortbread-1.0.mbtiles
 # Regenerable extracts (use tools/extract_oklahoma_counties.py + gfvtile2wmap)
 data/oklahoma_counties_pbf/
 data/oklahoma_counties_wmap/
+# Compact splice connectivity for hover magnifier (~170MB / many files)
+# Regenerate: tools/export_splice_detail.py (see docs/guides/fiber-map-data.md)
+demo/fiber_data/splice_detail/
+# Regenerable fiber package artifacts (build_fiber_package.sh)
+demo/fiber_data/path_index.sqlite
+demo/fiber_data/path_index/
+demo/fiber_data/[0-9]/
+demo/fiber_data/features.sqlite
+demo/fiber_data/diagram_index.json
+# Keep demo/fiber_data/manifest.json trackable when present (small)

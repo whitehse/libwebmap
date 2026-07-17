@@ -117,6 +117,7 @@ python3 -m http.server -d demo 8765   # Chrome/Edge + WebGPU
 | 015 | Fiber data / display split |
 | 016 | Fiber hover magnifier + compact splice detail |
 | 017 | **Three-tier data boundary** (sources / packages / display) |
+| 018 | Fiber path visual trace (host highlight + path_index) |
 
 Host tools also include **`fiber2features`** (design DB → `.fmap` package) and
 **`gfvtile2wmap`** (MVT → `.wmap`).

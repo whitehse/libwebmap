@@ -177,6 +177,8 @@ export function createFiberLayer(opts) {
   let fiberSpliceZmin = FIBER_SPLICE_ZMIN_DEFAULT;
   let show = true;
   let manifest = null;
+  /** Multiplier for fiber line opacity while path-trace is active (1 = normal). */
+  let dimFactor = 1.0;
   /** @type {Record<string,string>|null} */
   let diagramIndex = null;
   let diagramsBase = "./splice_diagrams/";
@@ -851,6 +853,13 @@ export function createFiberLayer(opts) {
     setShow(v) {
       show = !!v;
       if (!show) magnifier.cancel();
+    },
+    setDimFactor(f) {
+      const x = Number(f);
+      dimFactor = Number.isFinite(x) ? Math.max(0.05, Math.min(1, x)) : 1.0;
+    },
+    get dimFactor() {
+      return dimFactor;
     },
     get show() {
       return show;

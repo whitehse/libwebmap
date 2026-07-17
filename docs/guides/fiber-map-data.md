@@ -128,7 +128,8 @@ Normative layout: [docs/formats/fmap.md](../formats/fmap.md). Rows only:
 - taps: point + ports + strand/tube RGBA + 16-byte SP GUID
 - splices: point + RGBA + 16-byte GUID (SPs without a tap)
 
-Host still paints v2 tiles (`cable_guid` empty). Path trace needs v3 + path_index.
+Host still paints v2 tiles (`cable_guid` empty). Path trace needs v3 + path_index
+(ADR-018: click cable → highlight optical path; Esc clears).
 No triangle fans, no screen-space radii.
 
 ## Display (`demo/display/`)

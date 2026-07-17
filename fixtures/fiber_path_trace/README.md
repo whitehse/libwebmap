@@ -16,3 +16,14 @@ Known plant GUIDs in v3:
 
 Parse smoke: `python3 tests/test_fmap_parse.py`  
 Layout: [docs/formats/fmap.md](../../docs/formats/fmap.md)
+
+## Mini package (`package/`)
+
+Tiny fiber package for path-trace plumbing checks (one `.fmap` v3 tile +
+`path_index/` with a single path joining the sample cable GUIDs).
+
+```bash
+# Full local demo package (not fully committed — regenerable):
+export FIBER_DESIGN_DB=/path/to/fiber_design.sqlite
+./tools/build_fiber_package.sh   # → demo/fiber_data/ (fmap v3 + path_index)
+```

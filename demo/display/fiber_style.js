@@ -95,6 +95,18 @@ export function styleOrder(kind) {
 export const FIBER_TAP_ZMIN_DEFAULT = 13;
 export const FIBER_SPLICE_ZMIN_DEFAULT = 13;
 
+/** Path-trace highlight color (packed 0xAABBGGRR — amber). */
+export const TRACE_HIGHLIGHT_RGBA = 0xff00c8ff;
+
+/** Dim factor for non-selected fiber lines while a path is highlighted. */
+export const FIBER_DIM_FACTOR = 0.25;
+
+/** Max path candidates listed for one cable pick. */
+export const TRACE_MAX_CANDIDATES = 32;
+
+/** Max hops shown in the path list panel. */
+export const TRACE_MAX_HOPS_UI = 256;
+
 /** Build diagram URL from index entry or fallback naming. */
 export function diagramUrl(spGuid, diagramIndex, diagramsBase) {
   if (!spGuid) return null;

@@ -88,17 +88,71 @@
     }
     h3 { margin: 1rem 0 0.4rem; font-size: 0.95rem; }
     h3:first-child { margin-top: 0; }
+
+    #path-list {
+      position: absolute;
+      left: 12px;
+      bottom: 12px;
+      z-index: 5;
+      max-width: min(360px, 90vw);
+      max-height: 40vh;
+      overflow: auto;
+      background: rgba(16, 24, 42, 0.94);
+      border: 1px solid #2a3d5c;
+      border-radius: 8px;
+      padding: 0.5rem 0.65rem;
+      box-shadow: 0 6px 24px rgba(0,0,0,0.35);
+      font-size: 0.8rem;
+    }
+    #path-list[hidden] { display: none !important; }
+    .path-list-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      margin-bottom: 0.35rem;
+    }
+    .path-clear, .path-item {
+      font: inherit;
+      color: #e8eef7;
+      background: #1a2740;
+      border: 1px solid #334a6d;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .path-clear { padding: 0.15rem 0.45rem; font-size: 0.75rem; }
+    .path-item {
+      display: block;
+      width: 100%;
+      text-align: left;
+      margin: 0.2rem 0;
+      padding: 0.35rem 0.45rem;
+    }
+    .path-item:hover { background: #243656; }
+    .path-item.path-sel {
+      border-color: #ffc800;
+      background: #2a3018;
+    }
+    .path-id { color: #ffc800; font-family: ui-monospace, monospace; }
+    .path-meta { opacity: 0.85; }
+    .path-list-foot {
+      margin-top: 0.35rem;
+      opacity: 0.65;
+      font-size: 0.72rem;
+      font-family: ui-monospace, monospace;
+    }
   </style>
 </head>
 <body>
   <header>
     <h1>libwebmap WebGPU demo</h1>
-    <p>Rural fiber / electric status map — OSM basemap + CrescentLink fiber design. No Emscripten.</p>
+    <p>Rural fiber / electric status map — OSM basemap + fiber design packages. No Emscripten.</p>
   </header>
   <div id="wrap" class="sidebar-collapsed">
     <div id="map">
       <canvas id="c"></canvas>
       <canvas id="labels"></canvas>
+      <div id="path-list" hidden aria-live="polite"></div>
     </div>
     <aside id="sidebar" aria-label="Map details">
       <button
@@ -110,18 +164,17 @@
       >Info ›</button>
       <div id="sidebar-body">
         <div id="status">Initializing…</div>
-        <p><strong>Controls</strong>: drag pan · wheel zoom · hover fiber 0.5s for magnifier · click tap/splice for full diagram</p>
+        <p><strong>Controls</strong>: drag pan · wheel zoom · hover 0.5s magnifier · click cable to trace path · click tap/splice for diagram · Esc clears path</p>
         <h3>Fiber design</h3>
-        <p>Data: <code>fiber_data/*.fmap</code> (+ <code>features.sqlite</code> · <code>splice_detail/</code>)</p>
-        <p>Display: <code>demo/display/</code> (style + Canvas symbols + magnifier)</p>
+        <p>Data: <code>fiber_data/*.fmap</code> v3 (+ <code>path_index/</code> · <code>splice_detail/</code>)</p>
+        <p>Display: <code>demo/display/</code> (style + symbols + magnifier + path trace)</p>
         <ul style="margin:0.25rem 0;padding-left:1.2rem;line-height:1.4">
           <li>Cables / drops ≥ z10/z12 · taps &amp; splices ≥ z13</li>
-          <li>Taps: circle + drop-port digit (strand fill, tube stroke)</li>
-          <li>Splices (no tap): hexagon (enclosure symbol)</li>
-          <li>Hover magnifier: ports, strands, local splice schematic (drops dashed)</li>
-          <li>Click a symbol → splice diagram in a new tab</li>
+          <li>Taps: circle + drop-port digit · splices: hexagon</li>
+          <li>Click cable/drop → optical path highlight (needs path_index)</li>
+          <li>Click tap/splice → HTML diagram when installed</li>
         </ul>
-        <p>Diagrams: <code>splice_diagrams/</code></p>
+        <p>Diagrams optional: <code>splice_diagrams/</code></p>
         <h3>Basemap</h3>
         <p>Counties: Tulsa, Wagoner, Okmulgee, Creek, Okfuskee, McIntosh, Muskogee, Seminole, Lincoln</p>
         <p>Source: GeoFabrik experimental <code>oklahoma-shortbread-1.0.mbtiles</code></p>

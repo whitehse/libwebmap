@@ -1,0 +1,38 @@
+{
+  "kind": "fiber",
+  "format_version": 1,
+  "fmap_version": 3,
+  "name": "path_trace_fixture",
+  "source": {
+    "adapter": "fixture",
+    "label": "fiber_path_trace"
+  },
+  "zmin": 10,
+  "zmax": 10,
+  "center": [
+    -95.99,
+    36.15
+  ],
+  "zoom": 12,
+  "tiles": [
+    {
+      "z": 10,
+      "x": 950,
+      "y": 1610
+    }
+  ],
+  "features": {
+    "cables": 1,
+    "drops": 1,
+    "taps": 1,
+    "splices": 1,
+    "paths": 1
+  },
+  "path_index": "path_index/",
+  "path_index_format": 1,
+  "path_index_files": {
+    "meta": "path_index/meta.json",
+    "cable_to_paths": "path_index/cable_to_paths.json",
+    "paths": "path_index/paths.jsonl"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "path_index_format": 1,
+  "path_count": 1,
+  "hop_count": 3,
+  "cable_count": 2,
+  "crs": "EPSG:4326",
+  "source_crs": "EPSG:2267",
+  "max_hop_count": 2,
+  "geom_missing": 0,
+  "generated_at": "2026-07-17T18:41:49Z"
+}

@@ -6,6 +6,7 @@
  */
 
 import { createFiberLayer } from "./display/fiber_layer.js";
+import { createFiberTrace } from "./display/fiber_trace.js";
 
 const logEl = document.getElementById("log");
 const statusEl = document.getElementById("status");
@@ -620,7 +621,8 @@ struct Uniforms {
   translate: vec2f,
   // half-width in mercator meters for extruded lines; 0 for fills
   line_half_m: f32,
-  _pad: f32,
+  // 1.0 normal; <1 dims fiber lines during path trace (basemap stays 1.0)
+  fiber_dim: f32,
 };
 @group(0) @binding(0) var<uniform> u: Uniforms;
 
@@ -647,7 +649,9 @@ fn vs_main(
   let world = xy + normal * u.line_half_m;
   let p = (world + u.translate) * u.scale;
   o.pos = vec4f(p, 0.0, 1.0);
-  o.color = unpack_rgba(rgba);
+  let col = unpack_rgba(rgba);
+  let d = max(u.fiber_dim, 0.05);
+  o.color = vec4f(col.rgb * d, col.a);
   return o;
 }
 
@@ -662,6 +666,8 @@ let device, context, pipelineFill, uniformBuf, bindGroupLayout, bindGroup;
 const tileGpu = new Map();
 /** Fiber feature display (data .fmap → lines GPU + Canvas taps) */
 let fiberLayer = null;
+/** Optical path trace (path_index + highlight mesh) */
+let fiberTrace = null;
 let availableZooms = [];
 let fiberZmin = 10;
 let fiberZmax = 14;
@@ -1093,25 +1099,44 @@ function updateActiveTileZoom(zoom) {
 /** Scratch uniform buffer (reused — avoids alloc per write). */
 const uniformScratch = new Float32Array(8);
 const halfScratch = new Float32Array(2);
+let lastFiberDim = 1.0;
 
-function writeCameraUniforms(halfWidthM) {
+function isFiberPipelineDraw(g) {
+  return !!(
+    g &&
+    (g.isTrace ||
+      g.fiberKind ||
+      (typeof g.name === "string" && g.name.startsWith("fiber/")))
+  );
+}
+
+function writeCameraUniforms(halfWidthM, fiberDim) {
   const [cx, cy] = projectCenter();
   const mpp = metersPerPixel();
   const sx = 1 / (mpp * (view.w / 2));
   const sy = 1 / (mpp * (view.h / 2));
+  const dim = fiberDim != null ? fiberDim : 1.0;
   uniformScratch[0] = sx;
   uniformScratch[1] = sy;
   uniformScratch[2] = -cx;
   uniformScratch[3] = -cy;
   uniformScratch[4] = halfWidthM;
-  uniformScratch[5] = 0;
+  uniformScratch[5] = dim;
+  lastFiberDim = dim;
   device.queue.writeBuffer(uniformBuf, 0, uniformScratch);
 }
 
 /** Only update line_half_m after camera uniforms are already set. */
 function writeHalfWidth(halfWidthM) {
   halfScratch[0] = halfWidthM;
-  halfScratch[1] = 0;
+  halfScratch[1] = lastFiberDim;
+  device.queue.writeBuffer(uniformBuf, 16, halfScratch);
+}
+
+function writeHalfWidthAndDim(halfWidthM, fiberDim) {
+  halfScratch[0] = halfWidthM;
+  halfScratch[1] = fiberDim;
+  lastFiberDim = fiberDim;
   device.queue.writeBuffer(uniformBuf, 16, halfScratch);
 }
 
@@ -1135,6 +1160,9 @@ function collectDraws(tileZ) {
   if (fiberLayer) {
     fiberLayer.collectLineDraws(draws, cam, view, metersPerPixel);
   }
+  if (fiberTrace) {
+    fiberTrace.collectDraws(draws);
+  }
 
   draws.sort((a, b) => (a.order ?? 50) - (b.order ?? 50));
   return draws;
@@ -1145,6 +1173,10 @@ function collectDraws(tileZ) {
  * Quantize to 0.05m to keep buckets small while allowing zoom animation.
  */
 function drawHalfWidth(g, mpp) {
+  if (fiberTrace) {
+    const tw = fiberTrace.halfWidthForDraw(g, cam, mpp);
+    if (tw != null) return tw;
+  }
   if (fiberLayer) {
     const fw = fiberLayer.halfWidthForDraw(g, cam, mpp);
     if (fw != null) return fw;
@@ -1158,6 +1190,14 @@ function drawHalfWidth(g, mpp) {
     return 2.0 * mpp;
   }
   return 0;
+}
+
+function drawFiberDim(g) {
+  if (g?.isTrace) return 1.0;
+  if (isFiberPipelineDraw(g) && fiberLayer) {
+    return fiberLayer.dimFactor ?? 1.0;
+  }
+  return 1.0;
 }
 
 function frame(now) {
@@ -1190,19 +1230,24 @@ function frame(now) {
   pass.setBindGroup(0, bindGroup);
 
   let lastHalf = NaN;
+  let lastDim = NaN;
   let cameraWritten = false;
   for (let i = 0; i < draws.length; i++) {
     const g = draws[i];
     const halfM = drawHalfWidth(g, mpp);
+    const dim = drawFiberDim(g);
     // Quantize comparison to avoid float thrash
     const q = Math.round(halfM * 40) / 40;
+    const qd = Math.round(dim * 100) / 100;
     if (!cameraWritten) {
-      writeCameraUniforms(halfM);
+      writeCameraUniforms(halfM, dim);
       cameraWritten = true;
       lastHalf = q;
-    } else if (q !== lastHalf) {
-      writeHalfWidth(halfM);
+      lastDim = qd;
+    } else if (q !== lastHalf || qd !== lastDim) {
+      writeHalfWidthAndDim(halfM, dim);
       lastHalf = q;
+      lastDim = qd;
     }
     pass.setVertexBuffer(0, g.vb);
     pass.setIndexBuffer(g.ib, "uint32");
@@ -1210,7 +1255,7 @@ function frame(now) {
   }
   // Clear even if no draws
   if (!cameraWritten) {
-    writeCameraUniforms(0);
+    writeCameraUniforms(0, 1.0);
   }
 
   pass.end();
@@ -1393,10 +1438,14 @@ async function loadFiberTiles() {
     cam.maxZoom = Math.max(18, Math.max(zmax, fiberZmax) + 6);
     log(
       `fiber data ${stats.loaded}/${stats.total} tiles (z ${stats.availableZooms.join(",") || "—"}) · ` +
-        `taps≥z${fiberTapZmin} · ` +
+        `taps≥z${fiberTapZmin} · fmap_v${man.fmap_version ?? "?"} · ` +
         `feats cables=${man.features?.cables ?? "?"} drops=${man.features?.drops ?? "?"} ` +
-        `taps=${man.features?.taps ?? "?"} splices=${man.features?.splices ?? "?"}`
+        `taps=${man.features?.taps ?? "?"} splices=${man.features?.splices ?? "?"}` +
+        (man.features?.paths != null ? ` paths=${man.features.paths}` : "")
     );
+    if (fiberTrace) {
+      await fiberTrace.load(man, "./fiber_data");
+    }
     return man;
   } catch (e) {
     log("fiber data load failed: " + e.message);
@@ -1439,7 +1488,7 @@ canvas.addEventListener("pointerdown", (e) => {
 canvas.addEventListener("pointerup", (e) => {
   dragging = false;
   canvas.style.cursor = "";
-  // Click (not drag): open splice diagram for tap / splicepoint under cursor
+  // Click (not drag): cable → path trace; tap/splice → diagram
   if (
     !ptrDidDrag &&
     Math.hypot(e.clientX - ptrDownX, e.clientY - ptrDownY) < 6 &&
@@ -1448,7 +1497,22 @@ canvas.addEventListener("pointerup", (e) => {
     const rect = canvas.getBoundingClientRect();
     const cssX = e.clientX - rect.left;
     const cssY = e.clientY - rect.top;
-    fiberLayer.handleClick(cssX, cssY, view);
+    const hit = fiberLayer.pick(cssX, cssY, view, cam, metersPerPixel);
+    if (hit && (hit.kind === "cable" || hit.kind === "drop")) {
+      if (fiberTrace?.enabled) {
+        fiberTrace.selectByCable(hit.cable_guid || "");
+      } else {
+        log("Path index not available for this package");
+      }
+    } else {
+      fiberLayer.handleClick(cssX, cssY, view);
+    }
+  }
+});
+
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && fiberTrace) {
+    fiberTrace.clear();
   }
 });
 canvas.addEventListener("pointerleave", () => {
@@ -1587,6 +1651,15 @@ async function tryWasm() {
       labelCanvas,
       log,
     });
+    fiberTrace = createFiberTrace({
+      device,
+      log,
+      listEl: document.getElementById("path-list"),
+      setDimFactor: (f) => fiberLayer?.setDimFactor(f),
+      onChange: () => {
+        /* dim/highlight updated next frame */
+      },
+    });
     setStatus('<span class="ok">WebGPU ready</span> — loading tiles…');
     const manifest = await loadManifest();
     if (manifest.source?.label) {
@@ -1618,8 +1691,8 @@ async function tryWasm() {
 
     await tryWasm();
     log(
-      "demo ready — basemap .wmap · fiber .fmap · taps=circles · splices=hexagons · " +
-        "hover 0.5s magnifier · click opens splice diagram · symbols ≥z" +
+      "demo ready — basemap .wmap · fiber .fmap · path_index · " +
+        "click cable=trace · tap=diagram · Esc=clear · hover magnifier · symbols ≥z" +
         fiberTapZmin
     );
     lastFrameT = performance.now();
