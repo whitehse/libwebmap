@@ -58,15 +58,16 @@ Convert GeoFabrik / Shortbread MVT:
 Oklahoma basemap package + WebGPU demo:
 
 ```bash
-# docs/guides/oklahoma-tiles.md — tools/basemap_pipeline/
-python3 tools/basemap_pipeline/extract_region.py   # MBTiles → data/oklahoma_counties_pbf
-./tools/basemap_pipeline/build_package.sh          # → demo/basemap/ (.wmap + package manifest)
-# fiber package (Tier B bake in this repo; design DB from crescentlink_export):
-#   ./build/fiber2features "$FIBER_DESIGN_DB" -o demo/fiber_data \
-#       --zmin 10 --zmax 14 --tap-zmin 13 --splice-zmin 13
-#   ln -sfn ~/crescentlink_export/splice_diagrams demo/splice_diagrams  # optional
+# Basemap package (docs/guides/oklahoma-tiles.md)
+python3 tools/basemap_pipeline/extract_region.py
+./tools/basemap_pipeline/build_package.sh          # → demo/basemap/
+
+# Fiber package (docs/guides/fiber-map-data.md) — any design DB path
+#   export FIBER_DESIGN_DB=/path/to/fiber_design.sqlite
+#   export FIBER_DIAGRAMS_DIR=/path/to/splice_diagrams   # optional HTML
+#   ./tools/build_fiber_package.sh                     # → demo/fiber_data/
+
 python3 -m http.server -d demo 8765   # Chrome/Edge + WebGPU
-# fiber guide: docs/guides/fiber-map-data.md
 ```
 
 ## Session startup

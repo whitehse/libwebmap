@@ -1375,7 +1375,9 @@ async function loadFiberTiles() {
   try {
     const res = await fetch("./fiber_data/manifest.json");
     if (!res.ok) {
-      log("no fiber_data/manifest.json — run fiber2features → demo/fiber_data");
+      log(
+        "no fiber_data/manifest.json — set FIBER_DESIGN_DB and run tools/build_fiber_package.sh"
+      );
       return null;
     }
     const man = await res.json();

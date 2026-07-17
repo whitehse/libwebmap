@@ -20,12 +20,24 @@ into WASM).
 
 ## Usage
 
+Prefer the package recipe (manifest polish + optional diagrams + splice_detail):
+
 ```bash
-./build/fiber2features fiber_design.sqlite -o demo/fiber_data \
+export FIBER_DESIGN_DB=/path/to/fiber_design.sqlite
+# export FIBER_DIAGRAMS_DIR=/path/to/html   # optional
+./tools/build_fiber_package.sh
+```
+
+Low-level:
+
+```bash
+./build/fiber2features "$FIBER_DESIGN_DB" -o demo/fiber_data \
   --zmin 10 --zmax 14 --tap-zmin 13 --splice-zmin 13
 ```
 
-Options: `--bbox W,S,E,N`, `--limit N`, `--extent`, `-q`.
+Options: `--bbox W,S,E,N`, `--limit N`, `--extent`, `-q`.  
+Manifest `diagrams_url` defaults to `null`; `build_fiber_package.sh` sets
+`./splice_diagrams/` when diagrams are installed.
 
 ## Regenerate embedded schema
 

@@ -26,7 +26,7 @@
 - [x] **Format ownership docs** (`docs/formats/`: packages, fmap, fiber-design-input)
 - [x] **Basemap pipeline** (`tools/basemap_pipeline/` + package manifest fields)
 - [x] **fiber2features** host tool in libwebmap (vendored SQLite + schema_map)
-- [ ] Decouple demo docs / `build_fiber_package.sh` — design PR5
+- [x] **Fiber package recipe** (`build_fiber_package.sh`, `FIBER_DESIGN_DB`, optional diagrams)
 - [ ] fmap v3 cable GUID + path_index + fiber path trace UI — design PR6–8
 - [ ] fmap v3 cable GUID + path_index + fiber path trace UI — design PR6–8
 - [ ] Weather overlay package schema (docs) — design PR9

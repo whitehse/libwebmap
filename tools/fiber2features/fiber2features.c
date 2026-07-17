@@ -1568,7 +1568,7 @@ static int write_manifest(const char *outdir, const manifest_t *man,
             "  \"tables\": [\"map_cables\", \"map_taps\", \"map_splices\"],\n"
             "  \"features_sqlite\": \"features.sqlite\",\n"
             "  \"diagram_index\": \"diagram_index.json\",\n"
-            "  \"diagrams_url\": \"./splice_diagrams/\",\n"
+            "  \"diagrams_url\": null,\n"
             "  \"tiles\": [\n",
             label, label, man->min_lon, man->min_lat, man->max_lon, man->max_lat,
             clon, clat, opt->zmin + (opt->zmax - opt->zmin) / 2, opt->zmin,

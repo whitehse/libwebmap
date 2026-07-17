@@ -32,18 +32,25 @@ webmap_build_overlay_gpu(ctx, &gpu, 1);
 webmap_destroy(ctx);
 ```
 
-### Convert GeoFabrik experimental vector tiles
+### Map packages (basemap + optional fiber)
 
 ```bash
-# Oklahoma Shortbread → basemap package (see docs/guides/oklahoma-tiles.md)
+# Basemap: Oklahoma Shortbread → demo/basemap/ (docs/guides/oklahoma-tiles.md)
 python3 tools/basemap_pipeline/extract_region.py
-./tools/basemap_pipeline/build_package.sh    # → demo/basemap/
+./tools/basemap_pipeline/build_package.sh
+
+# Fiber: design SQLite → demo/fiber_data/ (docs/guides/fiber-map-data.md)
+# export FIBER_DESIGN_DB=/path/to/fiber_design.sqlite
+# export FIBER_DIAGRAMS_DIR=/path/to/splice_diagrams   # optional
+# ./tools/build_fiber_package.sh
+
 python3 -m http.server -d demo 8765
 ```
 
 ```bash
 ./build/gfvtile2wmap -z 10 -x 238 -y 401 path/to/tile.pbf -o tile.wmap
 ./build/gfvtile2wmap --dir data/oklahoma_counties_pbf -o out --zmin 8 --zmax 10
+./build/fiber2features "$FIBER_DESIGN_DB" -o demo/fiber_data --zmin 10 --zmax 14
 ```
 
 ### WASM (clang only, no Emscripten)

@@ -1,54 +1,107 @@
 # Fiber map data and display
 
-Fiber design is split into **data** (table-like features) and **display**
-(style + tessellation + screen symbols). This matches ADR-014: the host owns
-how geometry is drawn.
+Fiber is split into **data** (geometry + attributes) and **display** (style,
+tessellation, symbols). That matches ADR-014 (host owns paint) and ADR-015
+(`.fmap` / tables vs `demo/display/`). Data enters through the **three-tier
+boundary** (ADR-017):
 
-**Format ownership (ADR-017 / PR2):** normative specs live under
-[`docs/formats/`](../formats/) — [data-packages.md](../formats/data-packages.md)
-(manifests), [fmap.md](../formats/fmap.md) (`.fmap` bytes),
-[fiber-design-input.md](../formats/fiber-design-input.md) (intermediate design
-DB + CRS). Full operator recipe rewrite (env vars, optional diagrams, no
-absolute sibling paths) is deferred to a later cleanup PR; this guide remains
-the practical regenerate steps for now.
+| Tier | Role | Example |
+|------|------|---------|
+| **A** | Source adapter → design DB | `export_fiber_design` (CrescentLink GPKG, etc.) |
+| **B** | Design DB → map package | `fiber2features`, `export_splice_detail.py`, `build_fiber_package.sh` |
+| **C** | Display | libwebmap C/WASM + `demo/display/` |
+
+**Normative formats:** [data-packages.md](../formats/data-packages.md),
+[fmap.md](../formats/fmap.md), [fiber-design-input.md](../formats/fiber-design-input.md).
 
 ## Pipeline
 
 ```
-fiber_design.sqlite          # export_fiber_design (connectivity)
+FIBER_DESIGN_DB                 # Tier A intermediate (any path)
         │
-        ├─► fiber2features
-        │     features.sqlite              # map_cables + map_taps + map_splices
-        │     diagram_index.json           # splicepoint guid → diagram HTML basename
-        │     fiber_data/{z}/{x}/{y}.fmap  # tiled feature rows (no pixel radii / n-gons)
-        │     manifest.json
+        │  tools/build_fiber_package.sh
+        │    fiber2features + export_splice_detail
+        ▼
+  fiber package (e.g. demo/fiber_data/)
+    manifest.json               # kind=fiber, relative URLs only
+    features.sqlite
+    diagram_index.json
+    {z}/{x}/{y}.fmap
+    splice_detail/<guid>.json   # optional magnifier detail
         │
-        └─► tools/export_splice_detail.py
-              fiber_data/splice_detail/<guid>.json   # compact local connectivity
-        │
-        ▼  demo/display/
-fiber_style.js               # widths, radii, min-zooms, diagram URLs, magnifier
-fiber_fmap.js                # parse .fmap v2
-fiber_schematic.js           # Canvas2D tap / multi-cable / line callouts
-fiber_magnifier.js           # hover dwell + lens + detail fetch
-fiber_layer.js               # WebGPU lines + Canvas symbols + hover + click
+        ▼  demo/display/  (Tier C host paint)
+fiber_style.js · fiber_fmap.js · fiber_layer.js · magnifier …
 ```
 
-Splice HTML diagrams live under `demo/splice_diagrams/` (symlink or copy from
-`crescentlink_export/splice_diagrams`). Click a tap or splice symbol to open
-`./splice_diagrams/<basename>` in a new tab.
+**HTML splice diagrams are optional.** When present they are usually a
+page-relative tree (`demo/splice_diagrams/`), often a symlink from
+`FIBER_DIAGRAMS_DIR`. Paint, hover magnifier, and (later) path trace do **not**
+require diagrams or a fixed sibling checkout path.
 
-**Hover magnifier (≈500 ms dwell):** enlarges the feature under the pointer and
-shows a compact local schematic (when detail JSON is present):
+## One-command package bake
+
+```bash
+# Point at any design SQLite produced by a Tier A adapter
+export FIBER_DESIGN_DB=/path/to/fiber_design.sqlite
+
+# Optional: HTML diagrams for click-through (symlink into demo/)
+# export FIBER_DIAGRAMS_DIR=/path/to/splice_diagrams
+
+./tools/build_fiber_package.sh
+# → demo/fiber_data/  (+ optional demo/splice_diagrams → FIBER_DIAGRAMS_DIR)
+
+python3 -m http.server -d demo 8765
+```
+
+| Variable | Required | Default | Meaning |
+|----------|----------|---------|---------|
+| `FIBER_DESIGN_DB` | **yes** | — | Normalized design SQLite (see fiber-design-input) |
+| `OUT` | no | `demo/fiber_data` | Package output directory |
+| `FIBER_DIAGRAMS_DIR` | no | — | If set, symlink `demo/splice_diagrams` here |
+| `ZMIN` / `ZMAX` | no | 10 / 14 | Tile zoom range |
+| `TAP_ZMIN` / `SPLICE_ZMIN` | no | 13 / 13 | LOD mins for points |
+| `LIMIT` | no | 0 | Sample N cables (0 = all) |
+| `SKIP_SPLICE_DETAIL` | no | 0 | Set `1` to skip magnifier JSON |
+| `BUILD` | no | `build/` | CMake build dir for `fiber2features` |
+
+Low-level tools (same as the script):
+
+```bash
+cmake --build build --target fiber2features
+./build/fiber2features "$FIBER_DESIGN_DB" -o demo/fiber_data \
+  --zmin 10 --zmax 14 --tap-zmin 13 --splice-zmin 13
+
+python3 tools/export_splice_detail.py "$FIBER_DESIGN_DB" \
+  -o demo/fiber_data/splice_detail \
+  --map-db demo/fiber_data/features.sqlite \
+  --manifest demo/fiber_data/manifest.json
+```
+
+Basemap is separate: `tools/basemap_pipeline/build_package.sh` → `demo/basemap/`.
+Do not name basemap paths `tiles/` if a reverse proxy intercepts that segment.
+
+## What the demo needs to run
+
+| Asset | Required for paint? | Magnifier? | Full HTML diagram click? |
+|-------|---------------------|------------|---------------------------|
+| `demo/basemap/` | yes | no | no |
+| `demo/fiber_data/*.fmap` + manifest | yes | partial | no |
+| `demo/fiber_data/splice_detail/` | no | full schematic | no |
+| `demo/splice_diagrams/` (or `diagrams_url`) | no | no | **yes** |
+
+No absolute `~/…` paths in manifests. Bake tools write `source.label` basenames
+and relative `splice_detail_url` / optional `diagrams_url`.
+
+## Hover magnifier (≈500 ms dwell)
 
 | Feature | Magnifier content |
 |---------|-------------------|
-| **Tap** | Tap value (e.g. `2P-14`), station id, primary light loss (dB), feed **IN** / **PT** fibers with PT loss, **drops to home** (open vs patched) with per-port loss, and **through** cable↔cable fuse splices as fiber pairs |
-| **Splice** (no tap) | Enclosure diagram: two-cable fiber-by-fiber fuse view, multi-cable fan with pair counts, or single-cable + equipment ports; loss labels when non-zero |
+| **Tap** | Tap value (e.g. `2P-14`), station id, loss, IN/PT fibers, drops, through fuses |
+| **Splice** (no tap) | Enclosure fuse / multi-cable schematic |
 | **Cable / drop** | Size callout (drops dashed / warmer) |
 
-Fmap-only fallback (no detail file) still enlarges the map symbol. Click opens the
-full HTML splice diagram. See ADR-016.
+Fmap-only fallback still enlarges the symbol if detail JSON is missing. Click
+opens the full HTML diagram when `diagrams_url` resolves. See ADR-016.
 
 ## Tables (`features.sqlite`)
 
@@ -58,8 +111,6 @@ full HTML splice diagram. See ADR-016.
 | `map_taps` | `lon`, `lat`, **`ports`**, `sp_guid`, `diagram`, strand/tube colors |
 | `map_splices` | Non-tap splicepoints; `sp_guid`, `station_id`, `diagram` |
 
-Query example:
-
 ```sql
 SELECT ports, lon, lat, sp_guid, diagram FROM map_taps LIMIT 10;
 SELECT sp_guid, station_id, diagram FROM map_splices LIMIT 10;
@@ -67,13 +118,11 @@ SELECT sp_guid, station_id, diagram FROM map_splices LIMIT 10;
 
 ## `.fmap` tiles (v2)
 
-Binary feature packs for the browser. **Normative layout:**
-[docs/formats/fmap.md](../formats/fmap.md). Contents are **rows**:
+Normative layout: [docs/formats/fmap.md](../formats/fmap.md). Rows only:
 
-- cables / drops: polyline points in tile-local coords + size + packed RGBA
-  (no cable GUID until planned fmap v3)
-- taps: point + `ports` + strand/tube RGBA + 16-byte splicepoint GUID
-- splices: point + RGBA + 16-byte GUID (only SPs **without** a tap)
+- cables / drops: tile-local polyline + size + RGBA (cable GUID planned in v3)
+- taps: point + ports + strand/tube RGBA + 16-byte SP GUID
+- splices: point + RGBA + 16-byte GUID (SPs without a tap)
 
 No triangle fans, no screen-space radii.
 
@@ -83,19 +132,16 @@ No triangle fans, no screen-space radii.
 |--------|------|
 | `fiber_style.js` | Display policy (px widths, radii vs zoom, diagram URL, magnifier) |
 | `fiber_fmap.js` | Decode `.fmap` → JS objects |
-| `fiber_schematic.js` | Magnifier schematic drawing (tap / fuse / line) |
+| `fiber_schematic.js` | Magnifier schematic drawing |
 | `fiber_magnifier.js` | Hover delay, detail cache, glass lens |
-| `fiber_layer.js` | Extrude lines for WebGPU; paint symbols; pick + hover + click |
+| `fiber_layer.js` | WebGPU lines; Canvas symbols; pick + hover + click |
 
 | Symbol | Meaning |
 |--------|---------|
-| **Circle + digit** | Tap (drop port count); strand fill, tube stroke |
-| **Hexagon** | Splicepoint with no tap (enclosure) |
+| **Circle + digit** | Tap (drop port count) |
+| **Hexagon** | Splicepoint without tap |
 | **Solid line** | Mainline cable |
 | **(style)** | Drop cable (narrower; dashed in magnifier) |
-
-Symbols grow with zoom. Hover ≥0.5 s opens the magnifier; click opens the full
-splice diagram when a matching file exists under `splice_diagrams/`.
 
 ## Compact splice detail (`splice_detail/`)
 
@@ -105,53 +151,31 @@ One JSON object per splicepoint GUID (schema `v: 1`):
 |-------|---------|
 | `kind` | `tap` or `splice` |
 | `station_id` | Optional field id |
-| `tap` | **name** (e.g. `2P-14`), ports, **loss_db**, tube/strand colors |
+| `tap` | name, ports, **loss_db**, tube/strand colors |
 | `cables[]` | guid, size, `is_drop` |
 | `links[]` | `ingress` / `egress` / `drop` / `fuse` / `equip` (+ fiber endpoints, **loss_db**) |
 
-Lazy-fetched as `{fiber_data base}/splice_detail/<guid>.json` when the magnifier
-opens (demo default: `./fiber_data/splice_detail/<guid>.json`). Manifest field
-`splice_detail_url` is joined with the fiber_data baseUrl when it is relative
-(e.g. `./splice_detail/`); do not rely on a page-root `./splice_detail/` path —
-that 404s and the lens falls back to an enlarged symbol only.
+Lazy-fetched as `{fiber_data base}/splice_detail/<guid>.json`. Manifest
+`splice_detail_url` is relative to the fiber package (e.g. `./splice_detail/`).
+Directory is large/regenerable and typically gitignored.
 
-The directory is **gitignored** (large / regenerable); fmap-only magnifier content
-still works without it.
+## Tier A note (CrescentLink example)
 
-## Regenerate demo data
-
-Design DB is still produced by **crescentlink_export** (Tier A). Package bake
-is **libwebmap** `fiber2features` (Tier B):
+Producing `FIBER_DESIGN_DB` is **outside** this repo. Example with the
+crescentlink adapter (any path works):
 
 ```bash
-# Tier A (once): export + optional path walk
-#   cd ~/crescentlink_export && ./export_fiber_design … fiber_design.sqlite
+# In the adapter tree (not required to be a sibling of libwebmap):
+./export_fiber_design dump.gpkg /data/fiber_design.sqlite
+python3 trace_fiber_paths.py /data/fiber_design.sqlite   # optional paths
 
-cmake --build ~/libwebmap/build --target fiber2features
-./build/fiber2features ~/crescentlink_export/fiber_design_test.sqlite \
-  -o demo/fiber_data --zmin 10 --zmax 14 --tap-zmin 13 --splice-zmin 13
-
-# Compact connectivity for hover magnifier (map SPs only)
-python3 tools/export_splice_detail.py \
-  ~/crescentlink_export/fiber_design_test.sqlite \
-  -o demo/fiber_data/splice_detail \
-  --map-db demo/fiber_data/features.sqlite \
-  --manifest demo/fiber_data/manifest.json
-
-# Diagrams for click-through (optional; symlink is fine)
-ln -sfn ~/crescentlink_export/splice_diagrams demo/splice_diagrams
-
-python3 -m http.server -d demo 8765
+export FIBER_DESIGN_DB=/data/fiber_design.sqlite
+# optional: export FIBER_DIAGRAMS_DIR=/data/splice_diagrams
+cd /path/to/libwebmap && ./tools/build_fiber_package.sh
 ```
-
-Basemap remains `demo/basemap/` (`tools/basemap_pipeline/build_package.sh`).
-Do not name basemap paths `tiles/` if your reverse proxy intercepts that segment.
-
-A crescentlink `./fiber2features` **wrapper** exists only to exec
-`libwebmap/build/fiber2features` (fails loudly if missing).
 
 ## Legacy
 
-`fiber2wmap` still builds pre-tessellated `.wmap` fiber tiles for tools that
-need GPU-ready geometry offline. The WebGPU demo prefers **`.fmap` + display
-module** so data and paint stay separate.
+`fiber2wmap` (legacy GPU bake) may still live in a Tier A adapter tree. The
+WebGPU demo prefers **`.fmap` + display modules** so data and paint stay
+separate (ADR-015).

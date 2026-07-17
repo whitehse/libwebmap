@@ -59,7 +59,8 @@ Design + PR plan: [docs/designs/data-sources-display-separation.md](docs/designs
 | `cmake/WasmToolchain.cmake` | clang `wasm32` toolchain (no Emscripten) | — |
 | `demo/` | WebGPU host (WGSL) + optional `webmap.wasm` | C |
 | `demo/display/` | Fiber paint: style, .fmap parse, symbols, hover magnifier | C |
-| `tools/export_splice_detail.py` | fiber_design → compact per-SP JSON for magnifier | B |
+| `tools/export_splice_detail.py` | design DB → compact per-SP JSON for magnifier | B |
+| `tools/build_fiber_package.sh` | One-shot fiber package (`FIBER_DESIGN_DB`, optional diagrams) | B |
 | `tools/gfvtile2wmap/` | Single-tile + `--dir` batch converter | B |
 | `tools/basemap_pipeline/` | Shortbread MBTiles → PBF → basemap package | A/B |
 | `tools/fiber2features/` | Design DB → `.fmap` fiber package (vendored SQLite) | B |
