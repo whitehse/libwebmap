@@ -1,8 +1,7 @@
 # `.fmap` — fiber map feature tiles
 
-**Normative home for the `.fmap` binary layout.** Implementation today lives in
-`crescentlink_export/fiber2features.c` (Tier B bake tool; target home
-libwebmap `tools/fiber2features/`). Browser parse:
+**Normative home for the `.fmap` binary layout.** Writer:
+`tools/fiber2features/` (CMake target `fiber2features`). Browser parse:
 `demo/display/fiber_fmap.js`.
 
 `.fmap` holds **data only** (ADR-015): geometry + attributes. No pixel radii,

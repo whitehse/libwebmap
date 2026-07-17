@@ -120,27 +120,35 @@ still works without it.
 
 ## Regenerate demo data
 
+Design DB is still produced by **crescentlink_export** (Tier A). Package bake
+is **libwebmap** `fiber2features` (Tier B):
+
 ```bash
-cd ~/crescentlink_export
-make fiber2features
-./fiber2features fiber_design_test.sqlite -o ~/libwebmap/demo/fiber_data \
-  --zmin 10 --zmax 14 --tap-zmin 13 --splice-zmin 13
+# Tier A (once): export + optional path walk
+#   cd ~/crescentlink_export && ./export_fiber_design … fiber_design.sqlite
+
+cmake --build ~/libwebmap/build --target fiber2features
+./build/fiber2features ~/crescentlink_export/fiber_design_test.sqlite \
+  -o demo/fiber_data --zmin 10 --zmax 14 --tap-zmin 13 --splice-zmin 13
 
 # Compact connectivity for hover magnifier (map SPs only)
-python3 ~/libwebmap/tools/export_splice_detail.py \
-  fiber_design_test.sqlite \
-  -o ~/libwebmap/demo/fiber_data/splice_detail \
-  --map-db ~/libwebmap/demo/fiber_data/features.sqlite \
-  --manifest ~/libwebmap/demo/fiber_data/manifest.json
+python3 tools/export_splice_detail.py \
+  ~/crescentlink_export/fiber_design_test.sqlite \
+  -o demo/fiber_data/splice_detail \
+  --map-db demo/fiber_data/features.sqlite \
+  --manifest demo/fiber_data/manifest.json
 
-# Diagrams for click-through (symlink is fine; avoids duplicating ~1GB)
-ln -sfn ~/crescentlink_export/splice_diagrams ~/libwebmap/demo/splice_diagrams
+# Diagrams for click-through (optional; symlink is fine)
+ln -sfn ~/crescentlink_export/splice_diagrams demo/splice_diagrams
 
-python3 -m http.server -d ~/libwebmap/demo 8765
+python3 -m http.server -d demo 8765
 ```
 
-Basemap remains `demo/basemap/` (`.wmap` from `prepare_demo_tiles.sh`).
+Basemap remains `demo/basemap/` (`tools/basemap_pipeline/build_package.sh`).
 Do not name basemap paths `tiles/` if your reverse proxy intercepts that segment.
+
+A crescentlink `./fiber2features` **wrapper** exists only to exec
+`libwebmap/build/fiber2features` (fails loudly if missing).
 
 ## Legacy
 

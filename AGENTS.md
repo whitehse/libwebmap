@@ -61,9 +61,10 @@ Oklahoma basemap package + WebGPU demo:
 # docs/guides/oklahoma-tiles.md — tools/basemap_pipeline/
 python3 tools/basemap_pipeline/extract_region.py   # MBTiles → data/oklahoma_counties_pbf
 ./tools/basemap_pipeline/build_package.sh          # → demo/basemap/ (.wmap + package manifest)
-# fiber data (from crescentlink_export; package bake still there until PR4):
-#   ./fiber2features fiber_design.sqlite -o demo/fiber_data
-#   ln -sfn ~/crescentlink_export/splice_diagrams demo/splice_diagrams
+# fiber package (Tier B bake in this repo; design DB from crescentlink_export):
+#   ./build/fiber2features "$FIBER_DESIGN_DB" -o demo/fiber_data \
+#       --zmin 10 --zmax 14 --tap-zmin 13 --splice-zmin 13
+#   ln -sfn ~/crescentlink_export/splice_diagrams demo/splice_diagrams  # optional
 python3 -m http.server -d demo 8765   # Chrome/Edge + WebGPU
 # fiber guide: docs/guides/fiber-map-data.md
 ```
@@ -115,6 +116,9 @@ python3 -m http.server -d demo 8765   # Chrome/Edge + WebGPU
 | 015 | Fiber data / display split |
 | 016 | Fiber hover magnifier + compact splice detail |
 | 017 | **Three-tier data boundary** (sources / packages / display) |
+
+Host tools also include **`fiber2features`** (design DB → `.fmap` package) and
+**`gfvtile2wmap`** (MVT → `.wmap`).
 
 ## API surface (quick)
 

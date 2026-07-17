@@ -5,7 +5,7 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
-option(WEBMAP_BUILD_TOOLS "Build host utilities (gfvtile2wmap)" ON)
+option(WEBMAP_BUILD_TOOLS "Build host utilities (gfvtile2wmap, fiber2features)" ON)
 option(WEBMAP_BUILD_TESTS "Build unit tests" ON)
 option(WEBMAP_BUILD_WASM "Build freestanding WASM module (clang, no Emscripten)" OFF)
 option(WEBMAP_BUILD_FUZZ "Build libFuzzer harness" OFF)
@@ -28,10 +28,34 @@ if(NOT WEBMAP_BUILD_WASM)
     target_link_libraries(webmap PUBLIC m)
 endif()
 
-# ── Host tool: GeoFabrik MVT → .wmap ─────────────────────────────────
+# ── Host tools (not linked into WASM) ────────────────────────────────
 if(WEBMAP_BUILD_TOOLS AND NOT WEBMAP_BUILD_WASM)
     add_executable(gfvtile2wmap tools/gfvtile2wmap/main.c)
     target_link_libraries(gfvtile2wmap PRIVATE webmap)
+
+    # fiber2features: design DB → .fmap package (vendored SQLite amalgamation)
+    add_executable(fiber2features
+        tools/fiber2features/fiber2features.c
+        tools/fiber2features/schema_map_sql.c
+        tools/third_party/sqlite/sqlite3.c
+    )
+    target_include_directories(fiber2features PRIVATE
+        tools/third_party/sqlite
+    )
+    # SQLite amalgamation is third-party; do not fail the build on its warnings.
+    set_source_files_properties(tools/third_party/sqlite/sqlite3.c PROPERTIES
+        COMPILE_OPTIONS "-w"
+    )
+    # Amalgamation uses a few POSIX bits; fiber2features is host-only.
+    target_compile_definitions(fiber2features PRIVATE
+        SQLITE_THREADSAFE=0
+        SQLITE_OMIT_LOAD_EXTENSION=1
+    )
+    target_link_libraries(fiber2features PRIVATE m)
+    # fiber2features.c enables _POSIX_C_SOURCE; relax pedantic for that TU only
+    set_source_files_properties(tools/fiber2features/fiber2features.c PROPERTIES
+        COMPILE_OPTIONS "-Wno-pedantic"
+    )
 endif()
 
 # ── Tests ────────────────────────────────────────────────────────────
@@ -114,6 +138,11 @@ if(TARGET webmap)
 endif()
 if(TARGET gfvtile2wmap)
     install(TARGETS gfvtile2wmap RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
+if(TARGET fiber2features)
+    install(TARGETS fiber2features RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    install(FILES tools/schema/schema_map.sql
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/webmap)
 endif()
 if(TARGET webmap_wasm)
     install(TARGETS webmap_wasm DESTINATION ${CMAKE_INSTALL_LIBDIR})

@@ -62,6 +62,9 @@ Design + PR plan: [docs/designs/data-sources-display-separation.md](docs/designs
 | `tools/export_splice_detail.py` | fiber_design → compact per-SP JSON for magnifier | B |
 | `tools/gfvtile2wmap/` | Single-tile + `--dir` batch converter | B |
 | `tools/basemap_pipeline/` | Shortbread MBTiles → PBF → basemap package | A/B |
+| `tools/fiber2features/` | Design DB → `.fmap` fiber package (vendored SQLite) | B |
+| `tools/schema/schema_map.sql` | Map tables DDL for fiber package | B |
+| `tools/third_party/sqlite/` | SQLite amalgamation (host tools only) | B |
 | `tools/extract_oklahoma_counties.py` | Wrapper → `basemap_pipeline/extract_region.py` | A/B |
 | `tools/prepare_demo_tiles.sh` | Wrapper → `basemap_pipeline/build_package.sh` | B |
 | `data/` | GeoFabrik Shortbread + county extracts | inputs |

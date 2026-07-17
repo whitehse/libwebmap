@@ -25,8 +25,9 @@
 - [x] **ADR-017 three-tier data boundary** (sources / packages / display)
 - [x] **Format ownership docs** (`docs/formats/`: packages, fmap, fiber-design-input)
 - [x] **Basemap pipeline** (`tools/basemap_pipeline/` + package manifest fields)
-- [ ] Move `fiber2features` into libwebmap tools — design PR4
-- [ ] Decouple demo from absolute crescentlink paths — design PR5
+- [x] **fiber2features** host tool in libwebmap (vendored SQLite + schema_map)
+- [ ] Decouple demo docs / `build_fiber_package.sh` — design PR5
+- [ ] fmap v3 cable GUID + path_index + fiber path trace UI — design PR6–8
 - [ ] fmap v3 cable GUID + path_index + fiber path trace UI — design PR6–8
 - [ ] Weather overlay package schema (docs) — design PR9
 - [ ] Label / glyph atlas plumbing (or explicit deferral ADR)
