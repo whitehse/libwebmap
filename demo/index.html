@@ -5,39 +5,129 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>libwebmap — WebGPU status map demo</title>
   <style>
-    :root { color-scheme: dark; font-family: system-ui, sans-serif; }
+    :root {
+      color-scheme: dark;
+      font-family: system-ui, sans-serif;
+      --sidebar-w: 280px;
+      --sidebar-tab: 28px;
+    }
     body { margin: 0; background: #0b1220; color: #e8eef7; }
     header { padding: 0.75rem 1rem; background: #121a2b; border-bottom: 1px solid #243049; }
     header h1 { margin: 0; font-size: 1.1rem; font-weight: 600; }
     header p { margin: 0.25rem 0 0; opacity: 0.8; font-size: 0.85rem; }
-    #wrap { display: grid; grid-template-columns: 1fr 280px; height: calc(100vh - 72px); }
-    canvas { width: 100%; height: 100%; display: block; background: #0e1626; touch-action: none; }
-    aside { padding: 1rem; border-left: 1px solid #243049; background: #10182a; font-size: 0.85rem; }
-    aside code { font-size: 0.8rem; }
+    #wrap {
+      display: grid;
+      grid-template-columns: 1fr var(--sidebar-w);
+      height: calc(100vh - 72px);
+      transition: grid-template-columns 0.2s ease;
+    }
+    #wrap.sidebar-collapsed {
+      grid-template-columns: 1fr var(--sidebar-tab);
+    }
+    #map { position: relative; min-width: 0; min-height: 0; }
+    #map canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+    #c { background: #0e1626; touch-action: none; }
+    #labels { pointer-events: none; }
+
+    #sidebar {
+      position: relative;
+      display: flex;
+      flex-direction: row;
+      min-width: 0;
+      min-height: 0;
+      border-left: 1px solid #243049;
+      background: #10182a;
+      font-size: 0.85rem;
+      overflow: hidden;
+    }
+    #sidebar-toggle {
+      flex: 0 0 var(--sidebar-tab);
+      width: var(--sidebar-tab);
+      margin: 0;
+      padding: 0;
+      border: none;
+      border-radius: 0;
+      border-right: 1px solid #243049;
+      background: #152038;
+      color: #9ab0d0;
+      cursor: pointer;
+      font-size: 0.95rem;
+      line-height: 1;
+      writing-mode: vertical-rl;
+      text-orientation: mixed;
+      letter-spacing: 0.04em;
+    }
+    #sidebar-toggle:hover { background: #1c2a48; color: #e8eef7; }
+    #sidebar-body {
+      flex: 1 1 auto;
+      min-width: 0;
+      padding: 1rem;
+      overflow: auto;
+      opacity: 1;
+      transition: opacity 0.15s ease;
+    }
+    #wrap.sidebar-collapsed #sidebar-body {
+      opacity: 0;
+      pointer-events: none;
+      padding: 0;
+      overflow: hidden;
+    }
+    #wrap.sidebar-collapsed #sidebar-toggle {
+      border-right: none;
+    }
+
+    aside code, #sidebar code { font-size: 0.8rem; }
     .ok { color: #2ecc71; } .warn { color: #f1c40f; } .err { color: #e74c3c; }
-    #log { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 0.75rem; opacity: 0.9; max-height: 40vh; overflow: auto; }
-    button { margin: 0.25rem 0.25rem 0.25rem 0; padding: 0.4rem 0.7rem; border-radius: 6px; border: 1px solid #3a4d6e; background: #1a2740; color: inherit; cursor: pointer; }
-    button:hover { background: #243454; }
+    #log {
+      white-space: pre-wrap;
+      font-family: ui-monospace, monospace;
+      font-size: 0.75rem;
+      opacity: 0.9;
+      max-height: 40vh;
+      overflow: auto;
+    }
+    h3 { margin: 1rem 0 0.4rem; font-size: 0.95rem; }
+    h3:first-child { margin-top: 0; }
   </style>
 </head>
 <body>
   <header>
     <h1>libwebmap WebGPU demo</h1>
-    <p>Rural fiber / electric status map — Shortbread schema styling (VersaTiles Colorful) → .wmap. No Emscripten.</p>
+    <p>Rural fiber / electric status map — OSM basemap + CrescentLink fiber design. No Emscripten.</p>
   </header>
-  <div id="wrap">
-    <canvas id="c"></canvas>
-    <aside>
-      <div id="status">Initializing…</div>
-      <p><strong>Controls</strong>: drag pan · smooth wheel zoom (overzoom to z18)</p>
-      <button id="btn-fiber">Toggle fiber overlay</button>
-      <button id="btn-power">Toggle power overlay</button>
-      <button id="btn-outage">Simulate outage</button>
-      <h3>Region</h3>
-      <p>Counties: Tulsa, Wagoner, Okmulgee, Creek, Okfuskee, McIntosh, Muskogee, Seminole, Lincoln</p>
-      <p>Source: GeoFabrik experimental <code>oklahoma-shortbread-1.0.mbtiles</code></p>
-      <h3>Log</h3>
-      <div id="log"></div>
+  <div id="wrap" class="sidebar-collapsed">
+    <div id="map">
+      <canvas id="c"></canvas>
+      <canvas id="labels"></canvas>
+    </div>
+    <aside id="sidebar" aria-label="Map details">
+      <button
+        type="button"
+        id="sidebar-toggle"
+        aria-expanded="false"
+        aria-controls="sidebar-body"
+        title="Expand sidebar"
+      >Info ›</button>
+      <div id="sidebar-body">
+        <div id="status">Initializing…</div>
+        <p><strong>Controls</strong>: drag pan · wheel zoom · hover fiber 0.5s for magnifier · click tap/splice for full diagram</p>
+        <h3>Fiber design</h3>
+        <p>Data: <code>fiber_data/*.fmap</code> (+ <code>features.sqlite</code> · <code>splice_detail/</code>)</p>
+        <p>Display: <code>demo/display/</code> (style + Canvas symbols + magnifier)</p>
+        <ul style="margin:0.25rem 0;padding-left:1.2rem;line-height:1.4">
+          <li>Cables / drops ≥ z10/z12 · taps &amp; splices ≥ z13</li>
+          <li>Taps: circle + drop-port digit (strand fill, tube stroke)</li>
+          <li>Splices (no tap): hexagon (enclosure symbol)</li>
+          <li>Hover magnifier: ports, strands, local splice schematic (drops dashed)</li>
+          <li>Click a symbol → splice diagram in a new tab</li>
+        </ul>
+        <p>Diagrams: <code>splice_diagrams/</code></p>
+        <h3>Basemap</h3>
+        <p>Counties: Tulsa, Wagoner, Okmulgee, Creek, Okfuskee, McIntosh, Muskogee, Seminole, Lincoln</p>
+        <p>Source: GeoFabrik experimental <code>oklahoma-shortbread-1.0.mbtiles</code></p>
+        <h3>Log</h3>
+        <div id="log"></div>
+      </div>
     </aside>
   </div>
   <script type="module" src="./main.js"></script>
