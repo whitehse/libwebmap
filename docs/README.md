@@ -18,6 +18,10 @@ I/O and WebGPU device management.
 
 - [DOMAIN.md](DOMAIN.md) — basemap tiles, MVT/GeoFabrik, fiber/electric domain
 - [guides/fiber-map-data.md](guides/fiber-map-data.md) — fiber feature tables + display split
+- [formats/](formats/) — **Normative** package / `.fmap` / design-DB contracts
+  - [formats/data-packages.md](formats/data-packages.md) — manifests & versioning
+  - [formats/fmap.md](formats/fmap.md) — `.fmap` tile bytes (v1–v3)
+  - [formats/fiber-design-input.md](formats/fiber-design-input.md) — intermediate SQLite + CRS
 - [decisions/](decisions/) — Architecture Decision Records (ADRs 001–017)
 - [designs/](designs/) — Design docs (data-source boundary, path-trace plan)
 - [guides/wasm.md](guides/wasm.md) — freestanding clang WASM (no Emscripten)

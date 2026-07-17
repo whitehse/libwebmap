@@ -32,6 +32,8 @@ WebGPU path.
 - `fiber2wmap` remains a legacy GPU bake tool.
 - Taps render as screen-space circles with port digits; non-tap splicepoints
   as hexagons (enclosure); both open `splice_diagrams/` HTML on click.
+- Normative `.fmap` layout and package contracts live under
+  [`docs/formats/`](../formats/) (ADR-017); not only C header comments.
 
 ## Alternatives considered
 

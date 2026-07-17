@@ -4,6 +4,14 @@ Fiber design is split into **data** (table-like features) and **display**
 (style + tessellation + screen symbols). This matches ADR-014: the host owns
 how geometry is drawn.
 
+**Format ownership (ADR-017 / PR2):** normative specs live under
+[`docs/formats/`](../formats/) — [data-packages.md](../formats/data-packages.md)
+(manifests), [fmap.md](../formats/fmap.md) (`.fmap` bytes),
+[fiber-design-input.md](../formats/fiber-design-input.md) (intermediate design
+DB + CRS). Full operator recipe rewrite (env vars, optional diagrams, no
+absolute sibling paths) is deferred to a later cleanup PR; this guide remains
+the practical regenerate steps for now.
+
 ## Pipeline
 
 ```
@@ -59,10 +67,11 @@ SELECT sp_guid, station_id, diagram FROM map_splices LIMIT 10;
 
 ## `.fmap` tiles (v2)
 
-Binary feature packs for the browser (see header comment in
-`crescentlink_export/fiber2features.c`). Contents are **rows**:
+Binary feature packs for the browser. **Normative layout:**
+[docs/formats/fmap.md](../formats/fmap.md). Contents are **rows**:
 
 - cables / drops: polyline points in tile-local coords + size + packed RGBA
+  (no cable GUID until planned fmap v3)
 - taps: point + `ports` + strand/tube RGBA + 16-byte splicepoint GUID
 - splices: point + RGBA + 16-byte GUID (only SPs **without** a tap)
 

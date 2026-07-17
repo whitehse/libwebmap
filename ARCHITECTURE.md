@@ -69,6 +69,7 @@ Design + PR plan: [docs/designs/data-sources-display-separation.md](docs/designs
 | `docs/DOMAIN.md` | Domain: tiles, utilities, status semantics | — |
 | `docs/decisions/` | ADRs | — |
 | `docs/designs/` | Design docs (boundary, path trace plan) | — |
+| `docs/formats/` | Package / `.fmap` / design-DB contracts (normative) | — |
 | `docs/guides/` | WASM + Oklahoma tile + fiber data guides | — |
 | `TODO.md` | Living progress tracker | — |
 
