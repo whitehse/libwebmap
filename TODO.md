@@ -24,7 +24,7 @@
 - [x] Fiber hover magnifier (dwell + schematic + `splice_detail/` JSON)
 - [x] **ADR-017 three-tier data boundary** (sources / packages / display)
 - [x] **Format ownership docs** (`docs/formats/`: packages, fmap, fiber-design-input)
-- [ ] Promote Shortbread scripts to `tools/basemap_pipeline/` — design PR3
+- [x] **Basemap pipeline** (`tools/basemap_pipeline/` + package manifest fields)
 - [ ] Move `fiber2features` into libwebmap tools — design PR4
 - [ ] Decouple demo from absolute crescentlink paths — design PR5
 - [ ] fmap v3 cable GUID + path_index + fiber path trace UI — design PR6–8

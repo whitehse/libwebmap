@@ -35,9 +35,9 @@ webmap_destroy(ctx);
 ### Convert GeoFabrik experimental vector tiles
 
 ```bash
-# Oklahoma Shortbread → county PBF → demo .wmap (see docs/guides/oklahoma-tiles.md)
-python3 tools/extract_oklahoma_counties.py
-./tools/prepare_demo_tiles.sh
+# Oklahoma Shortbread → basemap package (see docs/guides/oklahoma-tiles.md)
+python3 tools/basemap_pipeline/extract_region.py
+./tools/basemap_pipeline/build_package.sh    # → demo/basemap/
 python3 -m http.server -d demo 8765
 ```
 

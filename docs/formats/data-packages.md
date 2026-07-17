@@ -86,14 +86,16 @@ Host rules of thumb:
 
 ### Legacy basemap manifests
 
-Existing `demo/basemap/manifest.json` may still use a top-level string:
+Older manifests may use a top-level string:
 
 ```json
 "source": "GeoFabrik oklahoma-shortbread-1.0.mbtiles"
 ```
 
 Loaders **must** accept that form for one migration window and treat it as
-`source.label`. Prefer structured `source` when regenerating packages.
+`source.label` (`demo/main.js` `normalizePackageManifest`).  
+`tools/basemap_pipeline/build_package.sh` writes structured `source` with
+`adapter` + `label`.
 
 **Bake tools must not write absolute filesystem paths** (e.g. `/home/…`) into
 manifests by default. Use `source.label` and optional `input_fingerprint`.

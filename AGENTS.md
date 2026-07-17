@@ -55,12 +55,13 @@ Convert GeoFabrik / Shortbread MVT:
 ./build/gfvtile2wmap --dir data/oklahoma_counties_pbf -o out_wmap --zmin 8 --zmax 10
 ```
 
-Oklahoma county pipeline + WebGPU demo:
+Oklahoma basemap package + WebGPU demo:
 
 ```bash
-# docs/guides/oklahoma-tiles.md
-./tools/prepare_demo_tiles.sh   # → demo/basemap/
-# fiber data (from crescentlink_export):
+# docs/guides/oklahoma-tiles.md — tools/basemap_pipeline/
+python3 tools/basemap_pipeline/extract_region.py   # MBTiles → data/oklahoma_counties_pbf
+./tools/basemap_pipeline/build_package.sh          # → demo/basemap/ (.wmap + package manifest)
+# fiber data (from crescentlink_export; package bake still there until PR4):
 #   ./fiber2features fiber_design.sqlite -o demo/fiber_data
 #   ln -sfn ~/crescentlink_export/splice_diagrams demo/splice_diagrams
 python3 -m http.server -d demo 8765   # Chrome/Edge + WebGPU

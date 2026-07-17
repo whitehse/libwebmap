@@ -61,8 +61,9 @@ Design + PR plan: [docs/designs/data-sources-display-separation.md](docs/designs
 | `demo/display/` | Fiber paint: style, .fmap parse, symbols, hover magnifier | C |
 | `tools/export_splice_detail.py` | fiber_design → compact per-SP JSON for magnifier | B |
 | `tools/gfvtile2wmap/` | Single-tile + `--dir` batch converter | B |
-| `tools/extract_oklahoma_counties.py` | MBTiles → county PBF tree (→ basemap pipeline) | A/B |
-| `tools/prepare_demo_tiles.sh` | County PBF → demo `.wmap` + manifest | B |
+| `tools/basemap_pipeline/` | Shortbread MBTiles → PBF → basemap package | A/B |
+| `tools/extract_oklahoma_counties.py` | Wrapper → `basemap_pipeline/extract_region.py` | A/B |
+| `tools/prepare_demo_tiles.sh` | Wrapper → `basemap_pipeline/build_package.sh` | B |
 | `data/` | GeoFabrik Shortbread + county extracts | inputs |
 | `fixtures/tulsa_z10/` | CI fixture tile | — |
 | `tests/` | Smoke, frustum, polygon, Oklahoma fixture | — |

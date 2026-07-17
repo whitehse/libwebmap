@@ -1,5 +1,9 @@
 # Oklahoma GeoFabrik Shortbread pipeline
 
+Basemap **source adapter + package bake** for the nine-county ECOEC demo
+(ADR-017). Tools live under `tools/basemap_pipeline/`. Package contract:
+[docs/formats/data-packages.md](../formats/data-packages.md).
+
 ## Source
 
 Experimental vector tile package from:
@@ -29,24 +33,49 @@ to ~z18 with extruded road/water widths.
 curl -L -o data/oklahoma-shortbread-1.0.mbtiles \
   https://download.geofabrik.de/north-america/us/oklahoma-shortbread-1.0.mbtiles
 
-# 2) Extract county PBF tree
-python3 tools/extract_oklahoma_counties.py \
+# 2) Extract region PBF tree (Tier A/B extract)
+python3 tools/basemap_pipeline/extract_region.py \
   --mbtiles data/oklahoma-shortbread-1.0.mbtiles \
   --out data/oklahoma_counties_pbf --zmin 8 --zmax 12
 
-# 3) Convert to .wmap (batch directory mode)
+# 3) Build basemap package → demo/basemap/ (Tier B bake)
+./tools/basemap_pipeline/build_package.sh
+# lighter pack: ZMAX=10 ./tools/basemap_pipeline/build_package.sh
+
+# 4) Optional: convert to a custom out dir without replacing demo
 ./build/gfvtile2wmap --dir data/oklahoma_counties_pbf \
   -o data/oklahoma_counties_wmap --zmin 8 --zmax 12 --quiet
-
-# 4) Demo tiles (z8–12 by default)
-./tools/prepare_demo_tiles.sh
-# lighter pack: ZMAX=10 ./tools/prepare_demo_tiles.sh
 
 # 5) Serve demo (Chrome/Edge with WebGPU)
 python3 -m http.server -d demo 8765
 ```
 
+Compatibility wrappers (same as steps 2–3):
+
+```bash
+python3 tools/extract_oklahoma_counties.py   # → extract_region.py
+./tools/prepare_demo_tiles.sh                # → build_package.sh
+```
+
 Fixture for CI: `fixtures/tulsa_z10/238_401.pbf` (single Tulsa-area tile).
+
+## Package manifest
+
+`build_package.sh` writes `demo/basemap/manifest.json` with package fields:
+
+| Field | Example |
+|-------|---------|
+| `kind` | `"basemap"` |
+| `format_version` | `1` |
+| `name` | `"oklahoma_counties"` |
+| `source.adapter` | `"geofabrik_shortbread"` |
+| `source.label` | `"GeoFabrik oklahoma-shortbread-1.0.mbtiles"` |
+| `bbox` / `center` / `zoom` / `zmin` / `zmax` / `tiles` | unchanged semantics |
+| `counties` | demo-only list |
+| `crs_display` | `"EPSG:3857"` |
+
+The demo host accepts both structured `source` and a legacy top-level string
+`source` (see `normalizePackageManifest` in `demo/main.js`).
 
 ## Shortbread styling
 

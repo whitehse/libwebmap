@@ -1,12 +1,17 @@
 /**
  * libwebmap WebGPU host demo.
- * Parses .wmap basemap tiles and draws with WebGPU (Shortbread-inspired style).
- * Features: extruded roads/water, LOD, smooth wheel zoom, overzoom past tile max.
+ * Basemap: .wmap (Shortbread). Fiber: data-only .fmap + demo/display/ layer.
+ * Features: extruded roads/water with miter joins, LOD, smooth wheel zoom,
+ * overzoom past tile max.
  */
+
+import { createFiberLayer } from "./display/fiber_layer.js";
 
 const logEl = document.getElementById("log");
 const statusEl = document.getElementById("status");
 const canvas = document.getElementById("c");
+const labelCanvas = document.getElementById("labels");
+const labelCtx = labelCanvas ? labelCanvas.getContext("2d") : null;
 
 function log(msg) {
   logEl.textContent += msg + "\n";
@@ -270,6 +275,10 @@ function landColor(kind) {
 
 function styleColor(name, baked) {
   const { layer, kind } = splitLayerKind(name);
+  /* Fiber paint is handled by demo/display/ (feature data + style). */
+  if (layer === "fiber") {
+    return baked;
+  }
   if (layer === "ocean" || layer === "water" || layer === "water_polygons") {
     return kind === "glacier" ? hex(C.glacier) : hex(C.water);
   }
@@ -350,6 +359,10 @@ function styleOrder(name) {
 
 function styleLineWidth(name, zoom) {
   const { layer, kind } = splitLayerKind(name.replace(/_casing$/, ""));
+  if (layer === "fiber") {
+    /* Fiber widths: demo/display/fiber_style.js */
+    return zoomStops({ 12: 1.5, 15: 2.5 }, zoom);
+  }
   if (
     layer === "streets" ||
     layer === "street_polygons" ||
@@ -374,6 +387,9 @@ function styleLineWidth(name, zoom) {
 
 function styleCasing(name) {
   const { layer, kind } = splitLayerKind(name);
+  if (layer === "fiber") {
+    return null;
+  }
   if (
     layer === "streets" ||
     layer === "street_polygons" ||
@@ -644,8 +660,12 @@ fn fs_main(i: VSOut) -> @location(0) vec4f {
 let device, context, pipelineFill, uniformBuf, bindGroupLayout, bindGroup;
 /** @type {Map<string, object[]>} key z/x/y → gpu layer draws */
 const tileGpu = new Map();
-let overlays = [];
+/** Fiber feature display (data .fmap → lines GPU + Canvas taps) */
+let fiberLayer = null;
 let availableZooms = [];
+let fiberZmin = 10;
+let fiberZmax = 14;
+let fiberTapZmin = 13;
 
 async function initGpu() {
   if (!navigator.gpu) {
@@ -664,6 +684,10 @@ async function initGpu() {
     cam.width = canvas.width;
     cam.height = canvas.height;
     context.configure({ device, format, alphaMode: "premultiplied" });
+    if (labelCanvas) {
+      labelCanvas.width = canvas.width;
+      labelCanvas.height = canvas.height;
+    }
   };
   resize();
   window.addEventListener("resize", resize);
@@ -750,8 +774,11 @@ function tileLocalToMerc(tile, extent, vx, vy) {
   return [mx, my];
 }
 
-/** Upload polygon layer as triangle list (normals zero). */
-function uploadFill(tile, layer, rgba) {
+/**
+ * Upload polygon layer as triangle list (normals zero).
+ * When useVertexColor is true (fiber layers), keep per-vertex baked RGBA.
+ */
+function uploadFill(tile, layer, rgba, useVertexColor = false) {
   if (layer.vc === 0 || layer.ic === 0) return null;
   const extent = layer.extent || 4096;
   const src = new DataView(layer.interleaved);
@@ -760,8 +787,9 @@ function uploadFill(tile, layer, rgba) {
   for (let i = 0; i < layer.vc; i++) {
     const vx = src.getFloat32(i * 12, true);
     const vy = src.getFloat32(i * 12 + 4, true);
+    const c = useVertexColor ? src.getUint32(i * 12 + 8, true) : rgba;
     const [mx, my] = tileLocalToMerc(tile, extent, vx, vy);
-    writeVertex(dv, i, mx, my, 0, 0, rgba);
+    writeVertex(dv, i, mx, my, 0, 0, c);
   }
   return createMesh(out, layer.indices, layer.ic, {
     name: layer.name,
@@ -775,66 +803,225 @@ function uploadFill(tile, layer, rgba) {
 }
 
 /**
- * Extrude line-list into triangle strip quads with unit normals.
- * Half-width applied in shader via uniform (screen-space → meters).
+ * Max miter length relative to half-width. Beyond this, clamp so sharp
+ * corners do not spike outward (CSS lineJoin: miter / miterLimit).
  */
-function uploadLineExtruded(tile, layer, rgba) {
+const LINE_MITER_LIMIT = 2.5;
+
+/** Left unit normal of direction (dx, dy). Direction must be unit length. */
+function leftNormal(dx, dy) {
+  return [-dy, dx];
+}
+
+/**
+ * Unit direction from A→B, or null if the segment is degenerate.
+ */
+function unitDir(x0, y0, x1, y1) {
+  let dx = x1 - x0;
+  let dy = y1 - y0;
+  const len = Math.hypot(dx, dy);
+  if (len < 1e-6) return null;
+  return [dx / len, dy / len];
+}
+
+/**
+ * Extrusion offset (shader multiplies by half-width) at polyline vertex i.
+ * Endpoints use the adjacent segment normal; interior joins use a miter
+ * (average of the two segment normals, scaled so half-width is preserved).
+ * pts: interleaved mercator xy for source vertices; idx: polyline indices.
+ */
+function joinNormal(pts, idx, i, closed) {
+  const n = idx.length;
+  const pi = idx[i];
+  const x = pts[pi * 2];
+  const y = pts[pi * 2 + 1];
+
+  // Previous / next points along the polyline
+  let iPrev, iNext;
+  if (closed) {
+    iPrev = idx[(i - 1 + n) % n];
+    iNext = idx[(i + 1) % n];
+  } else if (i === 0) {
+    const d = unitDir(x, y, pts[idx[1] * 2], pts[idx[1] * 2 + 1]);
+    if (!d) return [0, 0];
+    return leftNormal(d[0], d[1]);
+  } else if (i === n - 1) {
+    const d = unitDir(
+      pts[idx[n - 2] * 2],
+      pts[idx[n - 2] * 2 + 1],
+      x,
+      y
+    );
+    if (!d) return [0, 0];
+    return leftNormal(d[0], d[1]);
+  } else {
+    iPrev = idx[i - 1];
+    iNext = idx[i + 1];
+  }
+
+  const d0 = unitDir(pts[iPrev * 2], pts[iPrev * 2 + 1], x, y);
+  const d1 = unitDir(x, y, pts[iNext * 2], pts[iNext * 2 + 1]);
+  if (!d0 && !d1) return [0, 0];
+  if (!d0) return leftNormal(d1[0], d1[1]);
+  if (!d1) return leftNormal(d0[0], d0[1]);
+
+  const n0 = leftNormal(d0[0], d0[1]);
+  const n1 = leftNormal(d1[0], d1[1]);
+  let mx = n0[0] + n1[0];
+  let my = n0[1] + n1[1];
+  const mlen = Math.hypot(mx, my);
+  if (mlen < 1e-6) {
+    // U-turn: fall back to segment normal
+    return n0;
+  }
+  mx /= mlen;
+  my /= mlen;
+  // Scale so offset · n0 = 1 → constant half-width along both edges
+  const cos = mx * n0[0] + my * n0[1];
+  if (cos < 1e-4) return n0; // reflex / unstable: keep continuous with n0
+  let scale = 1 / cos;
+  if (scale > LINE_MITER_LIMIT) scale = LINE_MITER_LIMIT;
+  return [mx * scale, my * scale];
+}
+
+/**
+ * Walk a line-list index buffer and group into connected polylines
+ * (segment end == next segment start). Closed rings appear as chains
+ * whose first and last indices match.
+ */
+function collectPolylines(indices, indexCount, vertexCount) {
+  const chains = [];
+  let cur = null;
+  for (let s = 0; s + 1 < indexCount; s += 2) {
+    const i0 = indices[s];
+    const i1 = indices[s + 1];
+    if (i0 >= vertexCount || i1 >= vertexCount) continue;
+    if (!cur) {
+      cur = [i0, i1];
+      continue;
+    }
+    if (cur[cur.length - 1] === i0) {
+      cur.push(i1);
+    } else {
+      if (cur.length >= 2) chains.push(cur);
+      cur = [i0, i1];
+    }
+  }
+  if (cur && cur.length >= 2) chains.push(cur);
+  return chains;
+}
+
+/**
+ * Extrude polylines into triangle-list quads with miter joins.
+ * Normals are unit (or miter-scaled); half-width applied in the shader.
+ * pts: Float32Array interleaved mercator xy, length vc*2
+ * cols: Uint32Array per source vertex (optional if !useVertexColor)
+ * chains: array of index arrays into source vertices
+ * Returns { buffer, indices, vertexCount, indexCount } or null.
+ */
+function extrudePolylines(pts, cols, chains, rgba, useVertexColor) {
+  // Bound: 2 verts per polyline point, 6 indices per segment
+  let maxPts = 0;
+  let maxSegs = 0;
+  for (let c = 0; c < chains.length; c++) {
+    const ch = chains[c];
+    const closed = ch.length >= 3 && ch[0] === ch[ch.length - 1];
+    const nUnique = closed ? ch.length - 1 : ch.length;
+    maxPts += nUnique;
+    maxSegs += closed ? nUnique : nUnique - 1;
+  }
+  if (maxSegs <= 0) return null;
+
+  const outVerts = new ArrayBuffer(maxPts * 2 * 24);
+  const dv = new DataView(outVerts);
+  const inds = new Uint32Array(maxSegs * 6);
+  let vi = 0;
+  let ii = 0;
+
+  for (let c = 0; c < chains.length; c++) {
+    const ch = chains[c];
+    const closed = ch.length >= 3 && ch[0] === ch[ch.length - 1];
+    // For closed rings drop the duplicate closing index for vertex loop
+    const ring = closed ? ch.slice(0, -1) : ch;
+    if (ring.length < 2) continue;
+
+    // Skip zero-length rings
+    let anySeg = false;
+    for (let i = 0; i < ring.length; i++) {
+      const j = closed ? (i + 1) % ring.length : i + 1;
+      if (!closed && j >= ring.length) break;
+      if (unitDir(
+        pts[ring[i] * 2],
+        pts[ring[i] * 2 + 1],
+        pts[ring[j] * 2],
+        pts[ring[j] * 2 + 1]
+      )) {
+        anySeg = true;
+        break;
+      }
+    }
+    if (!anySeg) continue;
+
+    const base = vi;
+    for (let i = 0; i < ring.length; i++) {
+      const src = ring[i];
+      const x = pts[src * 2];
+      const y = pts[src * 2 + 1];
+      const [nx, ny] = joinNormal(pts, ring, i, closed);
+      const col = useVertexColor ? cols[src] : rgba;
+      writeVertex(dv, vi++, x, y, nx, ny, col);
+      writeVertex(dv, vi++, x, y, -nx, -ny, col);
+    }
+
+    const nV = ring.length;
+    const nSeg = closed ? nV : nV - 1;
+    for (let i = 0; i < nSeg; i++) {
+      const a = base + i * 2;
+      const b = base + ((i + 1) % nV) * 2;
+      // a=left0, a+1=right0, b=left1, b+1=right1
+      inds[ii++] = a;
+      inds[ii++] = a + 1;
+      inds[ii++] = b;
+      inds[ii++] = a + 1;
+      inds[ii++] = b + 1;
+      inds[ii++] = b;
+    }
+  }
+
+  if (vi === 0 || ii === 0) return null;
+  return {
+    buffer: outVerts.slice(0, vi * 24),
+    indices: inds.slice(0, ii),
+    vertexCount: vi,
+    indexCount: ii,
+  };
+}
+
+/**
+ * Extrude line-list into triangle quads with miter joins at polyline corners.
+ * Half-width applied in shader via uniform (screen-space → meters).
+ * useVertexColor: per-endpoint color from .wmap (fiber cable/drop/tap border).
+ */
+function uploadLineExtruded(tile, layer, rgba, useVertexColor = false) {
   if (layer.vc === 0 || layer.ic < 2) return null;
   const extent = layer.extent || 4096;
   const src = new DataView(layer.interleaved);
   const pts = new Float32Array(layer.vc * 2);
+  const cols = new Uint32Array(layer.vc);
   for (let i = 0; i < layer.vc; i++) {
     const vx = src.getFloat32(i * 12, true);
     const vy = src.getFloat32(i * 12 + 4, true);
+    cols[i] = src.getUint32(i * 12 + 8, true);
     const [mx, my] = tileLocalToMerc(tile, extent, vx, vy);
     pts[i * 2] = mx;
     pts[i * 2 + 1] = my;
   }
 
-  // Worst case: each segment → 4 verts, 6 indices
-  const segCount = layer.ic / 2;
-  const outVerts = new ArrayBuffer(Math.ceil(segCount) * 4 * 24);
-  const dv = new DataView(outVerts);
-  const inds = new Uint32Array(Math.ceil(segCount) * 6);
-  let vi = 0;
-  let ii = 0;
+  const chains = collectPolylines(layer.indices, layer.ic, layer.vc);
+  const mesh = extrudePolylines(pts, cols, chains, rgba, useVertexColor);
+  if (!mesh) return null;
 
-  for (let s = 0; s < layer.ic; s += 2) {
-    const i0 = layer.indices[s];
-    const i1 = layer.indices[s + 1];
-    if (i0 >= layer.vc || i1 >= layer.vc) continue;
-    const x0 = pts[i0 * 2];
-    const y0 = pts[i0 * 2 + 1];
-    const x1 = pts[i1 * 2];
-    const y1 = pts[i1 * 2 + 1];
-    let dx = x1 - x0;
-    let dy = y1 - y0;
-    const len = Math.hypot(dx, dy);
-    if (len < 1e-6) continue;
-    dx /= len;
-    dy /= len;
-    // Unit normal (left of direction)
-    const nx = -dy;
-    const ny = dx;
-
-    const base = vi;
-    writeVertex(dv, vi++, x0, y0, nx, ny, rgba);
-    writeVertex(dv, vi++, x0, y0, -nx, -ny, rgba);
-    writeVertex(dv, vi++, x1, y1, nx, ny, rgba);
-    writeVertex(dv, vi++, x1, y1, -nx, -ny, rgba);
-    // two triangles
-    inds[ii++] = base;
-    inds[ii++] = base + 1;
-    inds[ii++] = base + 2;
-    inds[ii++] = base + 1;
-    inds[ii++] = base + 3;
-    inds[ii++] = base + 2;
-  }
-
-  if (vi === 0) return null;
-  const tight = outVerts.slice(0, vi * 24);
-  const tightInd = inds.slice(0, ii);
-  return createMesh(tight, tightInd, ii, {
+  return createMesh(mesh.buffer, mesh.indices, mesh.indexCount, {
     name: layer.name,
     kind: "line",
     order: styleOrder(layer.name),
@@ -930,7 +1117,7 @@ function writeHalfWidth(halfWidthM) {
 
 /**
  * Collect GPU draws for the current viewport.
- * Frustum-culls tiles and keeps layers pre-sorted at load time.
+ * Frustum-culls basemap; fiber lines come from demo/display/fiber_layer.
  */
 function collectDraws(tileZ) {
   const draws = [];
@@ -944,9 +1131,11 @@ function collectDraws(tileZ) {
       for (let i = 0; i < layers.length; i++) draws.push(layers[i]);
     }
   }
-  for (let i = 0; i < overlays.length; i++) draws.push(overlays[i]);
-  // Layers within each tile are pre-sorted; merge only needs a stable sort by order
-  // when multiple tiles interleave. Cheap for the culled set.
+
+  if (fiberLayer) {
+    fiberLayer.collectLineDraws(draws, cam, view, metersPerPixel);
+  }
+
   draws.sort((a, b) => (a.order ?? 50) - (b.order ?? 50));
   return draws;
 }
@@ -956,6 +1145,10 @@ function collectDraws(tileZ) {
  * Quantize to 0.05m to keep buckets small while allowing zoom animation.
  */
 function drawHalfWidth(g, mpp) {
+  if (fiberLayer) {
+    const fw = fiberLayer.halfWidthForDraw(g, cam, mpp);
+    if (fw != null) return fw;
+  }
   if (g.kind === "line") {
     const baseName = g.name.replace(/_casing$/, "");
     const px = styleLineWidth(baseName, cam.zoom) * (g._widthScale ?? 1);
@@ -1023,12 +1216,22 @@ function frame(now) {
   pass.end();
   device.queue.submit([enc.finish()]);
 
+  /* Canvas2D: fiber taps (circles + port digits) — display module owns style */
+  if (labelCtx && labelCanvas) {
+    labelCtx.clearRect(0, 0, labelCanvas.width, labelCanvas.height);
+  }
+  if (fiberLayer) {
+    fiberLayer.paintSymbols(cam, view, metersPerPixel);
+  }
+
   // Throttle DOM status (layout work was stealing frames during zoom)
   if (now - lastStatusT > 200) {
     lastStatusT = now;
+    const fz = fiberLayer ? fiberLayer.selectFiberTileZoom(cam.zoom) : null;
     setStatus(
-      `<span class="ok">WebGPU</span> · z ${cam.zoom.toFixed(2)} · tiles z${tileZ} · ` +
-        `${draws.length} draws`
+      `<span class="ok">WebGPU</span> · z ${cam.zoom.toFixed(2)} · base z${tileZ}` +
+        (fz != null && fiberLayer?.show ? ` · fiber z${fz}` : "") +
+        ` · ${draws.length} draws`
     );
   }
 
@@ -1037,73 +1240,106 @@ function frame(now) {
 
 /* ── Load tiles ────────────────────────────────────────────────────── */
 
-async function loadManifest() {
-  const res = await fetch("./tiles/manifest.json");
-  if (!res.ok) {
-    throw new Error(
-      "missing demo/tiles/manifest.json — run tools/prepare_demo_tiles.sh"
-    );
+/**
+ * Normalize package manifest (docs/formats/data-packages.md).
+ * Accepts legacy top-level source string or structured source.{adapter,label}.
+ */
+function normalizePackageManifest(raw) {
+  const m = raw && typeof raw === "object" ? { ...raw } : {};
+  const src = m.source;
+  if (typeof src === "string") {
+    m.source = { label: src };
+  } else if (src && typeof src === "object") {
+    m.source = {
+      adapter: src.adapter,
+      label: src.label ?? src.name ?? "",
+      input_fingerprint: src.input_fingerprint,
+    };
+  } else {
+    m.source = { label: "" };
   }
-  return res.json();
+  if (m.kind == null) m.kind = "basemap";
+  if (m.format_version == null) m.format_version = 0; /* pre-package */
+  return m;
 }
 
-async function loadTiles(manifest) {
+async function loadManifest() {
+  const res = await fetch("./basemap/manifest.json");
+  if (!res.ok) {
+    throw new Error(
+      "missing demo/basemap/manifest.json — run tools/basemap_pipeline/build_package.sh"
+    );
+  }
+  return normalizePackageManifest(await res.json());
+}
+
+/**
+ * Parse one .wmap into GPU meshes. isFiber attaches minZoom for LOD fade-in.
+ */
+function tileToGpuLayers(tile, isFiber) {
+  const gpuLayers = [];
+  for (const layer of tile.layers) {
+    if (layer.name.includes("label") || layer.name.includes("place")) {
+      continue;
+    }
+    /* Fiber design is loaded from .fmap via demo/display/, not basemap .wmap */
+    if (isFiber || layer.name.startsWith("fiber/")) continue;
+    const baked =
+      layer.vc > 0
+        ? new DataView(layer.interleaved).getUint32(8, true)
+        : 0xffffffff;
+    const rgba = styleColor(layer.name, baked);
+    const perVertex = false;
+    if (layer.kind === 0) {
+      const g = uploadFill(tile, layer, rgba, perVertex);
+      if (g) {
+        gpuLayers.push(g);
+      }
+    } else if (layer.kind === 1) {
+      const paint = styleCasing(layer.name);
+      if (paint && paint.casing != null) {
+        const casing = uploadLineExtruded(tile, layer, paint.casing, false);
+        if (casing) {
+          casing.name = layer.name + "_casing";
+          casing.order = (paint.order ?? styleOrder(layer.name)) - 0.5;
+          casing.kind = "line";
+          casing._widthScale = paint.casingScale ?? 1.4;
+          gpuLayers.push(casing);
+        }
+      }
+      const g = uploadLineExtruded(tile, layer, rgba, perVertex);
+      if (g) {
+        g._widthScale = 1;
+        gpuLayers.push(g);
+      }
+    }
+    /* kind 2 POINT: basemap POIs unused; fiber taps use .fmap + display module */
+  }
+  if (gpuLayers.length) {
+    gpuLayers.sort((a, b) => (a.order ?? 50) - (b.order ?? 50));
+  }
+  return gpuLayers;
+}
+
+async function loadTilePyramid(manifest, baseUrl, targetMap, isFiber) {
   const byZoom = new Map();
   let loaded = 0;
-  // Parallel fetch with modest concurrency
-  const queue = [...manifest.tiles];
+  const queue = [...(manifest.tiles || [])];
   const workers = 8;
   async function worker() {
     while (queue.length) {
       const t = queue.shift();
       if (!t) break;
-      const url = `./tiles/${t.z}/${t.x}/${t.y}.wmap`;
+      const url = `${baseUrl}/${t.z}/${t.x}/${t.y}.wmap`;
       try {
         const r = await fetch(url);
         if (!r.ok) continue;
         const buf = await r.arrayBuffer();
         const tile = parseWmap(buf);
         const key = `${tile.z}/${tile.x}/${tile.y}`;
-        const gpuLayers = [];
-        for (const layer of tile.layers) {
-          if (
-            layer.name.includes("label") ||
-            layer.name.includes("place")
-          ) {
-            continue;
-          }
-          const rgba = styleColor(
-            layer.name,
-            new DataView(layer.interleaved).getUint32(8, true)
-          );
-          if (layer.kind === 0) {
-            const g = uploadFill(tile, layer, rgba);
-            if (g) gpuLayers.push(g);
-          } else if (layer.kind === 1) {
-            const paint = styleCasing(layer.name);
-            if (paint && paint.casing != null) {
-              // Outline / casing under the road/water fill (MapLibre dual-pass).
-              const casing = uploadLineExtruded(tile, layer, paint.casing);
-              if (casing) {
-                casing.name = layer.name + "_casing";
-                casing.order = (paint.order ?? styleOrder(layer.name)) - 0.5;
-                casing.kind = "line";
-                casing._widthScale = paint.casingScale ?? 1.4;
-                gpuLayers.push(casing);
-              }
-            }
-            const g = uploadLineExtruded(tile, layer, rgba);
-            if (g) {
-              g._widthScale = 1;
-              gpuLayers.push(g);
-            }
-          }
-          // skip points
-        }
+        const gpuLayers = tileToGpuLayers(tile, isFiber);
         if (gpuLayers.length) {
-          // Painter order fixed at load so the frame loop only merges tiles.
-          gpuLayers.sort((a, b) => (a.order ?? 50) - (b.order ?? 50));
-          tileGpu.set(key, gpuLayers);
+          targetMap.set(key, gpuLayers);
           if (!byZoom.has(tile.z)) byZoom.set(tile.z, 0);
           byZoom.set(tile.z, byZoom.get(tile.z) + 1);
           loaded++;
@@ -1114,16 +1350,56 @@ async function loadTiles(manifest) {
     }
   }
   await Promise.all(Array.from({ length: workers }, () => worker()));
+  return { loaded, byZoom, total: manifest.tiles?.length ?? 0 };
+}
+
+async function loadTiles(manifest) {
+  const { loaded, byZoom, total } = await loadTilePyramid(
+    manifest,
+    "./basemap",
+    tileGpu,
+    false
+  );
   availableZooms = [...byZoom.keys()].sort((a, b) => a - b);
   zmin = availableZooms[0] ?? 8;
   zmax = availableZooms[availableZooms.length - 1] ?? 12;
-  cam.minZoom = Math.max(6, zmin - 1);
-  // Allow overzoom well past max tile for "closer look"
-  cam.maxZoom = Math.max(18, zmax + 6);
+  cam.minZoom = Math.max(6, Math.min(zmin, fiberZmin) - 1);
+  cam.maxZoom = Math.max(18, Math.max(zmax, fiberZmax) + 6);
   activeTileZ = selectIdealTileZoom(cam.zoom);
   log(
-    `loaded ${loaded}/${manifest.tiles.length} tiles (z ${availableZooms.join(",")})`
+    `basemap ${loaded}/${total} tiles (z ${availableZooms.join(",") || "—"})`
   );
+}
+
+async function loadFiberTiles() {
+  try {
+    const res = await fetch("./fiber_data/manifest.json");
+    if (!res.ok) {
+      log("no fiber_data/manifest.json — run fiber2features → demo/fiber_data");
+      return null;
+    }
+    const man = await res.json();
+    if (!fiberLayer) {
+      log("fiber layer not initialized");
+      return null;
+    }
+    const stats = await fiberLayer.loadPyramid(man, "./fiber_data");
+    fiberZmin = stats.fiberZmin;
+    fiberZmax = stats.fiberZmax;
+    fiberTapZmin = stats.fiberTapZmin;
+    cam.minZoom = Math.max(6, Math.min(zmin, fiberZmin) - 1);
+    cam.maxZoom = Math.max(18, Math.max(zmax, fiberZmax) + 6);
+    log(
+      `fiber data ${stats.loaded}/${stats.total} tiles (z ${stats.availableZooms.join(",") || "—"}) · ` +
+        `taps≥z${fiberTapZmin} · ` +
+        `feats cables=${man.features?.cables ?? "?"} drops=${man.features?.drops ?? "?"} ` +
+        `taps=${man.features?.taps ?? "?"} splices=${man.features?.splices ?? "?"}`
+    );
+    return man;
+  } catch (e) {
+    log("fiber data load failed: " + e.message);
+    return null;
+  }
 }
 
 function selectIdealTileZoom(zoom) {
@@ -1135,93 +1411,86 @@ function selectIdealTileZoom(zoom) {
   return ideal;
 }
 
-/* ── Overlays ──────────────────────────────────────────────────────── */
-
-function makeOverlayLine(pointsLonLat, rgba) {
-  const n = pointsLonLat.length;
-  if (n < 2) return null;
-  const merc = pointsLonLat.map(([lon, lat]) => lonLatToMerc(lon, lat));
-  const segs = n - 1;
-  const out = new ArrayBuffer(segs * 4 * 24);
-  const dv = new DataView(out);
-  const inds = new Uint32Array(segs * 6);
-  let vi = 0;
-  let ii = 0;
-  for (let i = 0; i < segs; i++) {
-    const [x0, y0] = merc[i];
-    const [x1, y1] = merc[i + 1];
-    let dx = x1 - x0;
-    let dy = y1 - y0;
-    const len = Math.hypot(dx, dy) || 1;
-    dx /= len;
-    dy /= len;
-    const nx = -dy;
-    const ny = dx;
-    const base = vi;
-    writeVertex(dv, vi++, x0, y0, nx, ny, rgba);
-    writeVertex(dv, vi++, x0, y0, -nx, -ny, rgba);
-    writeVertex(dv, vi++, x1, y1, nx, ny, rgba);
-    writeVertex(dv, vi++, x1, y1, -nx, -ny, rgba);
-    inds[ii++] = base;
-    inds[ii++] = base + 1;
-    inds[ii++] = base + 2;
-    inds[ii++] = base + 1;
-    inds[ii++] = base + 3;
-    inds[ii++] = base + 2;
-  }
-  return createMesh(out, inds, ii, {
-    name: "overlay",
-    kind: "overlay-line",
-    order: styleOrder("overlay"),
-    halfWidthPx: 3,
-  });
-}
-
-let showFiber = true;
-let showPower = true;
-let fiberGpu = null;
-let powerGpu = null;
-let outageGpu = null;
-
-function rebuildOverlays() {
-  overlays = [];
-  if (showFiber && fiberGpu) overlays.push(fiberGpu);
-  if (showPower && powerGpu) overlays.push(powerGpu);
-  if (outageGpu) overlays.push(outageGpu);
-}
-
 /* ── Interaction ───────────────────────────────────────────────────── */
 
 let dragging = false;
 let lastX = 0;
 let lastY = 0;
+/** Pointer-down position for click-vs-drag (CSS client coords). */
+let ptrDownX = 0;
+let ptrDownY = 0;
+let ptrDidDrag = false;
 
 canvas.addEventListener("pointerdown", (e) => {
   dragging = true;
+  ptrDidDrag = false;
   lastX = e.clientX;
   lastY = e.clientY;
+  ptrDownX = e.clientX;
+  ptrDownY = e.clientY;
   canvas.setPointerCapture(e.pointerId);
   cam.zoomAnchor = null;
   cam.targetZoom = cam.zoom; // stop settle while panning
+  if (fiberLayer) fiberLayer.cancelHover();
+  canvas.style.cursor = "grabbing";
 });
-canvas.addEventListener("pointerup", () => {
+canvas.addEventListener("pointerup", (e) => {
   dragging = false;
+  canvas.style.cursor = "";
+  // Click (not drag): open splice diagram for tap / splicepoint under cursor
+  if (
+    !ptrDidDrag &&
+    Math.hypot(e.clientX - ptrDownX, e.clientY - ptrDownY) < 6 &&
+    fiberLayer?.show
+  ) {
+    const rect = canvas.getBoundingClientRect();
+    const cssX = e.clientX - rect.left;
+    const cssY = e.clientY - rect.top;
+    fiberLayer.handleClick(cssX, cssY, view);
+  }
+});
+canvas.addEventListener("pointerleave", () => {
+  if (fiberLayer) fiberLayer.cancelHover();
+  if (!dragging) canvas.style.cursor = "";
 });
 canvas.addEventListener("pointermove", (e) => {
-  if (!dragging) return;
-  const dx = e.clientX - lastX;
-  const dy = e.clientY - lastY;
-  lastX = e.clientX;
-  lastY = e.clientY;
-  const mpp = metersPerPixel(); // CSS pixels
-  const [mx, my] = projectCenter();
-  setCenterMerc(mx - dx * mpp, my + dy * mpp);
+  const rect = canvas.getBoundingClientRect();
+  const cssX = e.clientX - rect.left;
+  const cssY = e.clientY - rect.top;
+
+  if (dragging) {
+    const dx = e.clientX - lastX;
+    const dy = e.clientY - lastY;
+    lastX = e.clientX;
+    lastY = e.clientY;
+    if (Math.hypot(e.clientX - ptrDownX, e.clientY - ptrDownY) > 5)
+      ptrDidDrag = true;
+    const mpp = metersPerPixel(); // CSS pixels
+    const [mx, my] = projectCenter();
+    setCenterMerc(mx - dx * mpp, my + dy * mpp);
+    if (fiberLayer) fiberLayer.cancelHover();
+    return;
+  }
+
+  // Hover magnifier (dwell → enlarged feature + splice detail)
+  if (fiberLayer?.show) {
+    const over = fiberLayer.handleHover(
+      cssX,
+      cssY,
+      view,
+      cam,
+      metersPerPixel,
+      false
+    );
+    canvas.style.cursor = over ? "pointer" : "";
+  }
 });
 
 canvas.addEventListener(
   "wheel",
   (e) => {
     e.preventDefault();
+    if (fiberLayer) fiberLayer.cancelHover();
     // Use cached view size + offsetLeft/Top-free coords from the event target.
     const rect = canvas.getBoundingClientRect();
     // Keep view.w/h fresh if the window moved without a resize event.
@@ -1263,32 +1532,19 @@ canvas.addEventListener(
   { passive: false }
 );
 
-document.getElementById("btn-fiber").onclick = () => {
-  showFiber = !showFiber;
-  rebuildOverlays();
-  log("fiber " + (showFiber ? "on" : "off"));
-};
-document.getElementById("btn-power").onclick = () => {
-  showPower = !showPower;
-  rebuildOverlays();
-  log("power " + (showPower ? "on" : "off"));
-};
-document.getElementById("btn-outage").onclick = () => {
-  if (outageGpu) {
-    outageGpu = null;
-  } else {
-    outageGpu = makeOverlayLine(
-      [
-        [-96.05, 36.12],
-        [-95.95, 36.12],
-        [-95.9, 36.18],
-      ],
-      0xffe74c3c
-    );
-  }
-  rebuildOverlays();
-  log("outage " + (outageGpu ? "simulated" : "cleared"));
-};
+/* Sidebar collapse — free map width; remeasure canvas after layout */
+const wrapEl = document.getElementById("wrap");
+const sidebarToggle = document.getElementById("sidebar-toggle");
+if (sidebarToggle && wrapEl) {
+  sidebarToggle.addEventListener("click", () => {
+    const collapsed = wrapEl.classList.toggle("sidebar-collapsed");
+    sidebarToggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    sidebarToggle.title = collapsed ? "Expand sidebar" : "Collapse sidebar";
+    sidebarToggle.textContent = collapsed ? "Info ›" : "‹ Info";
+    // Remeasure after CSS grid transition (~200ms)
+    setTimeout(() => window.dispatchEvent(new Event("resize")), 220);
+  });
+}
 
 /* ── Optional WASM ─────────────────────────────────────────────────── */
 
@@ -1324,8 +1580,20 @@ async function tryWasm() {
 (async () => {
   try {
     await initGpu();
+    fiberLayer = createFiberLayer({
+      device,
+      labelCanvas,
+      log,
+    });
     setStatus('<span class="ok">WebGPU ready</span> — loading tiles…');
     const manifest = await loadManifest();
+    if (manifest.source?.label) {
+      log(
+        `basemap package: ${manifest.name || manifest.kind || "basemap"}` +
+          (manifest.source.adapter ? ` · ${manifest.source.adapter}` : "") +
+          ` · ${manifest.source.label}`
+      );
+    }
     cam.lon = manifest.center?.[0] ?? cam.lon;
     cam.lat = manifest.center?.[1] ?? cam.lat;
     cam.zoom = manifest.zoom ?? 10;
@@ -1333,28 +1601,25 @@ async function tryWasm() {
     zmin = manifest.zmin ?? 8;
     zmax = manifest.zmax ?? 12;
     await loadTiles(manifest);
+    const fiberMan = await loadFiberTiles();
 
-    fiberGpu = makeOverlayLine(
-      [
-        [-96.1, 36.0],
-        [-95.99, 36.15],
-        [-95.85, 36.2],
-        [-95.7, 36.05],
-      ],
-      0xff9b59b6
-    );
-    powerGpu = makeOverlayLine(
-      [
-        [-96.2, 36.1],
-        [-96.0, 36.1],
-        [-95.9, 35.95],
-        [-95.8, 35.85],
-      ],
-      0xffe67e22
-    );
-    rebuildOverlays();
+    /* Center on fiber network when design tiles are present */
+    if (fiberMan?.center) {
+      cam.lon = fiberMan.center[0];
+      cam.lat = fiberMan.center[1];
+      cam.zoom = Math.max(fiberMan.zoom ?? 12, fiberTapZmin - 1);
+      cam.targetZoom = cam.zoom;
+      log(
+        `centered on fiber network ${cam.lon.toFixed(4)}, ${cam.lat.toFixed(4)} z${cam.zoom}`
+      );
+    }
+
     await tryWasm();
-    log("demo ready — pan, smooth wheel-zoom (overzoom past tile max)");
+    log(
+      "demo ready — basemap .wmap · fiber .fmap · taps=circles · splices=hexagons · " +
+        "hover 0.5s magnifier · click opens splice diagram · symbols ≥z" +
+        fiberTapZmin
+    );
     lastFrameT = performance.now();
     requestAnimationFrame(frame);
   } catch (e) {
