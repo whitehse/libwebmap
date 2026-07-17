@@ -168,8 +168,8 @@ splice_detail are progressive enhancements (ADR-017).
 
 ## Weather package (`kind`: `"weather"`)
 
-Schema only for now — see design doc; full mapping lands with PR9
-(`docs/formats/weather-package.md`). Overlays use host
+Schema + fixture: [weather-package.md](weather-package.md),
+`fixtures/weather/sample_alerts.json`. Overlays use host
 `webmap_upsert_overlay` + `WEBMAP_CLASS_ALERT`; not C-core tiles.
 
 ## Related

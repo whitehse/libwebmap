@@ -119,6 +119,9 @@ no graph walk in WASM/core for v1. Format and UI details are follow-on ADRs/PRs
 ## References
 
 - Design: [docs/designs/data-sources-display-separation.md](../designs/data-sources-display-separation.md)
-- Formats: [data-packages.md](../formats/data-packages.md), [fmap.md](../formats/fmap.md), [fiber-design-input.md](../formats/fiber-design-input.md)
-- ADR-011 GeoFabrik MVT utility · ADR-014 plumbing vs host · ADR-015 data/display · ADR-016 magnifier
-- `docs/guides/fiber-map-data.md` (pipeline text; rewrite follows later PRs)
+- Formats: [data-packages.md](../formats/data-packages.md), [fmap.md](../formats/fmap.md),
+  [fiber-design-input.md](../formats/fiber-design-input.md),
+  [path-index.md](../formats/path-index.md),
+  [weather-package.md](../formats/weather-package.md)
+- ADR-011 GeoFabrik MVT · ADR-014 host boundary · ADR-015 data/display · ADR-016 magnifier · ADR-018 path trace
+- `docs/guides/fiber-map-data.md` — fiber package recipe (`FIBER_DESIGN_DB`)

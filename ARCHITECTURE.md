@@ -38,9 +38,10 @@ Weather (future) ──► raw ──► weather package ──► host overlays
 
 **Rules (summary):** Tier C never imports CrescentLink/GPKG types. Tier B does
 not open vendor GPKG dumps. Display formats (`.wmap`, `.fmap`, path_index,
-manifests) are owned by this repo. HTML splice diagrams and absolute sibling
-paths are optional inputs, not required for paint. Residual ECOEC CRS
-(EPSG:2267 GPKG geom) in fiber bake is documented until Tier A emits WGS84 WKB.
+manifests, weather package schema) are owned by this repo. HTML splice diagrams
+and absolute sibling paths are optional inputs, not required for paint. Residual
+ECOEC CRS (EPSG:2267 GPKG geom) in fiber bake is documented until Tier A emits
+WGS84 WKB. Weather/wind: [docs/formats/weather-package.md](docs/formats/weather-package.md).
 
 Full decision: [docs/decisions/017-three-tier-data-boundary.md](docs/decisions/017-three-tier-data-boundary.md).  
 Design + PR plan: [docs/designs/data-sources-display-separation.md](docs/designs/data-sources-display-separation.md).

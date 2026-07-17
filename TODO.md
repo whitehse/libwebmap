@@ -31,7 +31,8 @@
 - [x] **path_index export** (`export_path_index.py` → cable_to_paths + paths.jsonl)
 - [x] **Fiber path trace UI** (ADR-018, `fiber_trace.js`, dim + path list)
 - [x] **Demo fiber package regen** path (fmap v3 + path_index via build_fiber_package)
-- [ ] Weather overlay package schema (docs) — design PR9
+- [x] **Weather overlay package schema** (`docs/formats/weather-package.md` + fixture)
+- [x] **CrescentLink adapter cleanup** (Tier A docs; map bake → libwebmap)
 - [ ] Label / glyph atlas plumbing (or explicit deferral ADR)
 - [ ] Style document (subset of MapLibre style for paint properties)
 - [ ] Overlay spatial index for large feature counts

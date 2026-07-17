@@ -71,6 +71,23 @@ polling, IPFIX/path correlation, or NMS siblings.
 `CUSTOMER` and `ALERT` classes support join keys used by ops UIs: a household
 with both electric and fiber can show stacked status without two maps.
 
+## Weather / wind (overlay packages)
+
+Weather is **not** a basemap tile layer and is **not** ingested inside the C
+core. Future feeds produce a **weather package** (`kind: "weather"`) that the
+host maps to dynamic overlays:
+
+| Geometry | Overlay | Class |
+|----------|---------|-------|
+| Polygon / MultiPolygon | FILL | `WEBMAP_CLASS_ALERT` |
+| LineString | LINE | `WEBMAP_CLASS_ALERT` |
+| Point | POINT | `WEBMAP_CLASS_ALERT` |
+
+Status strings (`ok` / `degraded` / `down` / …) map to `webmap_status_t` and
+`webmap_status_rgba`. Gridded wind may be a host-only raster texture stub —
+see [formats/weather-package.md](formats/weather-package.md) and
+`fixtures/weather/sample_alerts.json`.
+
 ## WebGPU presentation
 
 The library packs:
