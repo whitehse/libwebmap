@@ -1,7 +1,7 @@
 /**
  * Parse .fmap feature tiles (data only; ADR-015).
  * Normative layout: docs/formats/fmap.md
- * (Writer currently: crescentlink_export/fiber2features.c — moving to libwebmap tools.)
+ * Writer: tools/fiber2features/ (libwebmap)
  */
 
 const FMAP_MAGIC = 0x50414d46; /* 'FMAP' LE */
@@ -32,11 +32,13 @@ export function guidBytesToString(bytes) {
   );
 }
 
+const NIL_GUID = "00000000-0000-0000-0000-000000000000";
+
 /**
  * @returns {{
- *   z:number,x:number,y:number,extent:number,
- *   cables: Array<{n_pts:number,size:number,rgba:number,xy:Float32Array}>,
- *   drops: Array<{n_pts:number,size:number,rgba:number,xy:Float32Array}>,
+ *   version:number,z:number,x:number,y:number,extent:number,
+ *   cables: Array<{n_pts:number,size:number,rgba:number,cable_guid:string,xy:Float32Array}>,
+ *   drops: Array<{n_pts:number,size:number,rgba:number,cable_guid:string,xy:Float32Array}>,
  *   taps: Array<{x:number,y:number,ports:number,strand_rgba:number,tube_rgba:number,sp_guid:string}>,
  *   splices: Array<{x:number,y:number,rgba:number,sp_guid:string}>
  * }}
@@ -46,7 +48,7 @@ export function parseFmap(buf) {
   if (buf.byteLength < 36) throw new Error("fmap too short");
   if (u32(dv, 0) !== FMAP_MAGIC) throw new Error("bad fmap magic");
   const version = u32(dv, 4);
-  if (version !== 1 && version !== 2)
+  if (version !== 1 && version !== 2 && version !== 3)
     throw new Error("bad fmap version " + version);
   const z = dv.getUint8(8);
   const x = u32(dv, 12);
@@ -58,7 +60,7 @@ export function parseFmap(buf) {
   let nSplices = 0;
   let off = 36;
   if (version >= 2) {
-    if (buf.byteLength < 40) throw new Error("fmap v2 header short");
+    if (buf.byteLength < 40) throw new Error("fmap v2+ header short");
     nSplices = u32(dv, 36);
     off = 40;
   }
@@ -71,6 +73,13 @@ export function parseFmap(buf) {
       const size = u16(dv, off + 2);
       const rgba = u32(dv, off + 4);
       off += 8;
+      let cable_guid = "";
+      if (version >= 3) {
+        if (off + 16 > buf.byteLength) throw new Error("fmap truncated guid");
+        cable_guid = guidBytesToString(new Uint8Array(buf, off, 16));
+        if (cable_guid === NIL_GUID) cable_guid = "";
+        off += 16;
+      }
       if (off + n_pts * 8 > buf.byteLength) throw new Error("fmap truncated pts");
       const xy = new Float32Array(n_pts * 2);
       for (let k = 0; k < n_pts; k++) {
@@ -78,7 +87,7 @@ export function parseFmap(buf) {
         xy[k * 2 + 1] = dv.getFloat32(off + 4, true);
         off += 8;
       }
-      out.push({ n_pts, size, rgba, xy });
+      out.push({ n_pts, size, rgba, cable_guid, xy });
     }
     return out;
   }
@@ -97,7 +106,7 @@ export function parseFmap(buf) {
     let sp_guid = "";
     if (version >= 2) {
       sp_guid = guidBytesToString(new Uint8Array(buf, off + 20, 16));
-      if (sp_guid === "00000000-0000-0000-0000-000000000000") sp_guid = "";
+      if (sp_guid === NIL_GUID) sp_guid = "";
     }
     off += rec;
     taps.push({ x: tx, y: ty, ports, strand_rgba, tube_rgba, sp_guid });
@@ -111,10 +120,10 @@ export function parseFmap(buf) {
     const sy = dv.getFloat32(off + 4, true);
     const rgba = u32(dv, off + 8);
     let sp_guid = guidBytesToString(new Uint8Array(buf, off + 12, 16));
-    if (sp_guid === "00000000-0000-0000-0000-000000000000") sp_guid = "";
+    if (sp_guid === NIL_GUID) sp_guid = "";
     off += 28;
     splices.push({ x: sx, y: sy, rgba, sp_guid });
   }
 
-  return { z, x, y, extent, cables, drops, taps, splices };
+  return { version, z, x, y, extent, cables, drops, taps, splices };
 }

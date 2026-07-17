@@ -12,7 +12,7 @@ n-gons, or line extrusion — the host styles and tessellates.
 | Offset | Type | Field |
 |--------|------|-------|
 | 0 | u32 | magic `0x50414D46` (`'FMAP'`) |
-| 4 | u32 | **version** (`1`, `2`, or planned `3`) |
+| 4 | u32 | **version** (`1`, `2`, or `3`) |
 | 8 | u8 | tile `z` |
 | 9–11 | u8[3] | pad |
 | 12 | u32 | tile `x` |
@@ -34,7 +34,7 @@ RGBA packing matches the rest of libwebmap host code: packed `u32` used as
 
 ## Line records (cables and drops)
 
-### Version 1 and 2 (current)
+### Version 1 and 2
 
 ```
 n_pts   u16
@@ -43,10 +43,10 @@ rgba    u32
 pts[n_pts] { float x, float y }
 ```
 
-**No plant cable GUID** on the line record. Joining a pick to optical paths is
-not possible from tile bytes alone (see v3).
+**No plant cable GUID** on the line record. Host pick uses synthetic `line_id`
+only; path-index join is not available from tile bytes alone.
 
-### Version 3 (planned — path-trace join key)
+### Version 3 (current writer — path-trace join key)
 
 ```
 n_pts       u16
@@ -56,9 +56,10 @@ cable_guid  u8[16]   # binary UUID; all-zero = missing
 pts[n_pts] { float x, float y }
 ```
 
-+16 bytes per cable/drop line vs v2. Taps/splices unchanged. Writers must
-`SELECT` cable `guid` into the emit path (not only `map_cables` SQLite).
-Parsers dual-support v2 (empty guid) and v3.
++16 bytes per cable/drop line vs v2. Taps/splices unchanged.
+`fiber2features` SELECTs `cables.guid` into each line feature.
+Parsers dual-support v2 (`cable_guid` empty string) and v3.
+Fixtures: `fixtures/fiber_path_trace/sample_v{2,3}.fmap`.
 
 ## Tap records
 
@@ -103,8 +104,8 @@ sp_guid u8[16]
 | Version | Lines | Taps | Splices | Notes |
 |---------|-------|------|---------|-------|
 | 1 | no GUID | no `sp_guid` | none | Legacy |
-| **2** | no GUID | + `sp_guid` | + section | **Current demo / fiber2features** |
-| **3** | + `cable_guid[16]` | same as v2 | same as v2 | Planned for path index join |
+| 2 | no GUID | + `sp_guid` | + section | Still painted by host |
+| **3** | + `cable_guid[16]` | same as v2 | same as v2 | **Current `fiber2features`**; path-index join |
 
 ## Related package artifacts
 

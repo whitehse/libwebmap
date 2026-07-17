@@ -116,14 +116,15 @@ SELECT ports, lon, lat, sp_guid, diagram FROM map_taps LIMIT 10;
 SELECT sp_guid, station_id, diagram FROM map_splices LIMIT 10;
 ```
 
-## `.fmap` tiles (v2)
+## `.fmap` tiles (v3)
 
 Normative layout: [docs/formats/fmap.md](../formats/fmap.md). Rows only:
 
-- cables / drops: tile-local polyline + size + RGBA (cable GUID planned in v3)
+- cables / drops: tile-local polyline + size + RGBA + **16-byte cable GUID** (v3)
 - taps: point + ports + strand/tube RGBA + 16-byte SP GUID
 - splices: point + RGBA + 16-byte GUID (SPs without a tap)
 
+Host still paints v2 tiles (`cable_guid` empty). Path trace needs v3 + path_index.
 No triangle fans, no screen-space radii.
 
 ## Display (`demo/display/`)

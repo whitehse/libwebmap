@@ -86,6 +86,11 @@ if(WEBMAP_BUILD_TESTS AND NOT WEBMAP_BUILD_WASM)
     target_link_libraries(webmap_fixture_ok PRIVATE webmap)
     add_test(NAME webmap_fixture_ok COMMAND webmap_fixture_ok
              WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
+    # .fmap v2/v3 golden fixtures (Python; no extra deps)
+    add_test(NAME webmap_fmap_parse
+             COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_fmap_parse.py
+             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 endif()
 
 # ── Freestanding WASM module (ADR-009, ADR-010) ──────────────────────

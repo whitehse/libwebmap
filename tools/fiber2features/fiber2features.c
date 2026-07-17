@@ -37,7 +37,7 @@
 extern const char webmap_schema_map_sql[];
 
 #define FMAP_MAGIC   0x50414D46u /* 'FMAP' LE */
-#define FMAP_VERSION 2u
+#define FMAP_VERSION 3u /* v3: cable_guid[16] on cable/drop lines (docs/formats/fmap.md) */
 #define FMAP_EXTENT  4096u
 
 #define EARTH_R 6378137.0
@@ -435,6 +435,7 @@ typedef struct {
     uint16_t n_pts;
     uint16_t size;
     uint32_t rgba;
+    uint8_t cable_guid[16]; /* plant cable GUID (v3); zero if unknown */
 } line_feat_t;
 
 typedef struct {
@@ -483,7 +484,8 @@ typedef struct {
 } tile_map_t;
 
 static int line_list_push(line_list_t *L, const float *xy, uint16_t n_pts,
-                          uint16_t size, uint32_t rgba)
+                          uint16_t size, uint32_t rgba,
+                          const uint8_t cable_guid[16])
 {
     if (n_pts < 2)
         return 0;
@@ -503,6 +505,10 @@ static int line_list_push(line_list_t *L, const float *xy, uint16_t n_pts,
     L->v[L->n].n_pts = n_pts;
     L->v[L->n].size = size;
     L->v[L->n].rgba = rgba;
+    if (cable_guid)
+        memcpy(L->v[L->n].cable_guid, cable_guid, 16);
+    else
+        memset(L->v[L->n].cable_guid, 0, 16);
     L->n++;
     return 0;
 }
@@ -642,7 +648,8 @@ static bool lonlat_in_bbox(const struct options *opt, double lon, double lat)
 /* Emit one continuous polyline (no NaN seps) into covering tiles. */
 static int emit_line_part(tile_map_t *tm, const ok_north_t *crs,
                           const double *xy_src, size_t n, uint16_t size,
-                          uint32_t rgba, int is_drop, const struct options *opt)
+                          uint32_t rgba, int is_drop, const struct options *opt,
+                          const uint8_t cable_guid[16])
 {
     if (n < 2)
         return 0;
@@ -726,7 +733,7 @@ static int emit_line_part(tile_map_t *tm, const ok_north_t *crs,
             }
             line_list_t *L = is_drop ? &tile->drops : &tile->cables;
             if (line_list_push(L, local, (uint16_t)(n > 65535 ? 65535 : n), size,
-                               rgba) != 0) {
+                               rgba, cable_guid) != 0) {
                 free(local);
                 free(ll);
                 return -1;
@@ -740,7 +747,8 @@ static int emit_line_part(tile_map_t *tm, const ok_north_t *crs,
 
 static int emit_path_lines(tile_map_t *tm, const ok_north_t *crs,
                            const path_t *src, uint16_t size, uint32_t rgba,
-                           int is_drop, const struct options *opt)
+                           int is_drop, const struct options *opt,
+                           const uint8_t cable_guid[16])
 {
     if (!src || src->n < 2)
         return 0;
@@ -752,7 +760,7 @@ static int emit_path_lines(tile_map_t *tm, const ok_north_t *crs,
         size_t len = i - start;
         if (len >= 2) {
             if (emit_line_part(tm, crs, src->xy + start * 2, len, size, rgba,
-                               is_drop, opt) != 0)
+                               is_drop, opt, cable_guid) != 0)
                 return -1;
         }
         start = i + 1;
@@ -838,15 +846,16 @@ static void wr_u16(uint8_t *p, uint16_t v)
 }
 
 /* Header = 40 bytes: magic,ver,z,pad,x,y,extent,n_cables,n_drops,n_taps,n_splices */
+/* Line record v3: n_pts u16, size u16, rgba u32, cable_guid[16], pts[] */
 static size_t fmap_size_of(const tile_t *t)
 {
     size_t n = 40;
     for (size_t i = 0; i < t->cables.n; i++)
-        n += 8 + (size_t)t->cables.v[i].n_pts * 8;
+        n += 8 + 16 + (size_t)t->cables.v[i].n_pts * 8;
     for (size_t i = 0; i < t->drops.n; i++)
-        n += 8 + (size_t)t->drops.v[i].n_pts * 8;
+        n += 8 + 16 + (size_t)t->drops.v[i].n_pts * 8;
     n += t->taps.n * 36;    /* x,y,ports,pad,strand,tube,guid16 */
-    n += t->splices.n * 28; /* x,y,pad4,rgba,guid16 */
+    n += t->splices.n * 28; /* x,y,rgba,guid16 */
     return n;
 }
 
@@ -877,6 +886,8 @@ static size_t fmap_encode(uint8_t z, uint32_t x, uint32_t y, uint32_t extent,
             wr_u16(out + off + 2, f->size);
             wr_u32(out + off + 4, f->rgba);
             off += 8;
+            memcpy(out + off, f->cable_guid, 16);
+            off += 16;
             for (uint16_t k = 0; k < f->n_pts; k++) {
                 memcpy(out + off, &f->xy[k * 2], 4);
                 memcpy(out + off + 4, &f->xy[k * 2 + 1], 4);
@@ -1074,7 +1085,7 @@ static int load_cables(sqlite3 *db, tile_map_t *tm, const ok_north_t *crs,
     if (prepare_drop_cables(db) != 0)
         return -1;
     const char *sql =
-        "SELECT c.geom, COALESCE(c.cable_size,0), dc.strand\n"
+        "SELECT c.guid, c.geom, COALESCE(c.cable_size,0), dc.strand\n"
         "FROM cables c\n"
         "LEFT JOIN _drop_cables dc ON dc.guid = c.guid\n"
         "WHERE c.geom IS NOT NULL";
@@ -1088,17 +1099,22 @@ static int load_cables(sqlite3 *db, tile_map_t *tm, const ok_north_t *crs,
     while (sqlite3_step(st) == SQLITE_ROW) {
         if (opt->limit > 0 && (nc + nd) >= opt->limit)
             break;
-        const uint8_t *blob = sqlite3_column_blob(st, 0);
-        int blen = sqlite3_column_bytes(st, 0);
-        int size = sqlite3_column_int(st, 1);
-        const char *strand = (const char *)sqlite3_column_text(st, 2);
+        const char *guid_txt = (const char *)sqlite3_column_text(st, 0);
+        uint8_t cable_guid[16];
+        memset(cable_guid, 0, 16);
+        if (guid_txt)
+            (void)parse_uuid_bytes(guid_txt, cable_guid);
+        const uint8_t *blob = sqlite3_column_blob(st, 1);
+        int blen = sqlite3_column_bytes(st, 1);
+        int size = sqlite3_column_int(st, 2);
+        const char *strand = (const char *)sqlite3_column_text(st, 3);
         int wlen = 0;
         const uint8_t *wkb = gpkg_to_wkb(blob, blen, &wlen);
         if (!wkb || wkb_decode_path(wkb, wlen, &path) != 0)
             continue;
         if (strand != NULL && opt->do_drops) {
             if (emit_path_lines(tm, crs, &path, (uint16_t)(size > 0 ? size : 1),
-                                tia_color(strand), 1, opt) != 0) {
+                                tia_color(strand), 1, opt, cable_guid) != 0) {
                 path_free(&path);
                 sqlite3_finalize(st);
                 return -1;
@@ -1106,7 +1122,8 @@ static int load_cables(sqlite3 *db, tile_map_t *tm, const ok_north_t *crs,
             nd++;
         } else if (opt->do_cables) {
             if (emit_path_lines(tm, crs, &path, (uint16_t)(size > 0 ? size : 1),
-                                color_for_cable_size(size), 0, opt) != 0) {
+                                color_for_cable_size(size), 0, opt,
+                                cable_guid) != 0) {
                 path_free(&path);
                 sqlite3_finalize(st);
                 return -1;
@@ -1548,7 +1565,7 @@ static int write_manifest(const char *outdir, const manifest_t *man,
             "  \"kind\": \"fiber\",\n"
             "  \"format_version\": 1,\n"
             "  \"format\": \"fmap\",\n"
-            "  \"fmap_version\": 2,\n"
+            "  \"fmap_version\": 3,\n"
             "  \"name\": \"%s\",\n"
             "  \"source\": {\n"
             "    \"adapter\": \"crescentlink_normalized_ecoec\",\n"

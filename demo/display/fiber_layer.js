@@ -304,6 +304,7 @@ export function createFiberLayer(opts) {
         merc,
         n: ln.n_pts,
         id: `${key}/${kind}/${idx++}`,
+        cable_guid: ln.cable_guid || "",
       });
     }
   }
@@ -775,6 +776,7 @@ export function createFiberLayer(opts) {
                 cable_size: ln.size,
                 rgba: ln.rgba,
                 line_id: ln.id,
+                cable_guid: ln.cable_guid || "",
                 mx,
                 my,
                 screenCssX: apx / dpr,

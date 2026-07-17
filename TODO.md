@@ -27,8 +27,9 @@
 - [x] **Basemap pipeline** (`tools/basemap_pipeline/` + package manifest fields)
 - [x] **fiber2features** host tool in libwebmap (vendored SQLite + schema_map)
 - [x] **Fiber package recipe** (`build_fiber_package.sh`, `FIBER_DESIGN_DB`, optional diagrams)
-- [ ] fmap v3 cable GUID + path_index + fiber path trace UI — design PR6–8
-- [ ] fmap v3 cable GUID + path_index + fiber path trace UI — design PR6–8
+- [x] **fmap v3** cable GUID writer + dual parser + pick plumbing
+- [ ] path_index export + fiber path trace UI — design PR7–8
+- [ ] Demo fiber_data regen to fmap v3 — design PR6b
 - [ ] Weather overlay package schema (docs) — design PR9
 - [ ] Label / glyph atlas plumbing (or explicit deferral ADR)
 - [ ] Style document (subset of MapLibre style for paint properties)
