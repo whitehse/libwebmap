@@ -91,6 +91,11 @@ if(WEBMAP_BUILD_TESTS AND NOT WEBMAP_BUILD_WASM)
     add_test(NAME webmap_fmap_parse
              COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_fmap_parse.py
              WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
+    # path_index exporter self-test (synthetic design DB)
+    add_test(NAME webmap_path_index
+             COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/export_path_index.py --self-test
+             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 endif()
 
 # ── Freestanding WASM module (ADR-009, ADR-010) ──────────────────────

@@ -149,7 +149,7 @@ Additional fields:
 | `splice_detail_url` | optional | Relative to fiber package base (e.g. `./splice_detail/`) |
 | `diagrams_url` | optional | **Page-relative** URL for HTML diagrams (demo often `./splice_diagrams/`). If null/missing, diagram click is a no-op |
 | `diagram_index` | optional | GUID → HTML basename map |
-| `path_index` / `path_index_format` / `path_index_files` | optional | Planned; required for path-trace UI |
+| `path_index` / `path_index_format` / `path_index_files` | optional | [path-index.md](path-index.md); required for path-trace UI |
 | `features` | optional | Counts for UI / sanity |
 | `zmin` / `zmax` / `tiles` | recommended | Tile pyramid coverage |
 

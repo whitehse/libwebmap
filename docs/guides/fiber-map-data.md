@@ -20,14 +20,15 @@ boundary** (ADR-017):
 FIBER_DESIGN_DB                 # Tier A intermediate (any path)
         │
         │  tools/build_fiber_package.sh
-        │    fiber2features + export_splice_detail
+        │    fiber2features + export_splice_detail + export_path_index
         ▼
   fiber package (e.g. demo/fiber_data/)
     manifest.json               # kind=fiber, relative URLs only
     features.sqlite
     diagram_index.json
-    {z}/{x}/{y}.fmap
+    {z}/{x}/{y}.fmap            # v3 includes cable_guid
     splice_detail/<guid>.json   # optional magnifier detail
+    path_index/                 # optional path-trace index
         │
         ▼  demo/display/  (Tier C host paint)
 fiber_style.js · fiber_fmap.js · fiber_layer.js · magnifier …
@@ -62,6 +63,8 @@ python3 -m http.server -d demo 8765
 | `TAP_ZMIN` / `SPLICE_ZMIN` | no | 13 / 13 | LOD mins for points |
 | `LIMIT` | no | 0 | Sample N cables (0 = all) |
 | `SKIP_SPLICE_DETAIL` | no | 0 | Set `1` to skip magnifier JSON |
+| `SKIP_PATH_INDEX` | no | 0 | Set `1` to skip path_index (needs `fiber_paths`) |
+| `PATH_INDEX_LIMIT` | no | 0 | Cap path export (0 = all) |
 | `BUILD` | no | `build/` | CMake build dir for `fiber2features` |
 
 Low-level tools (same as the script):
@@ -82,12 +85,13 @@ Do not name basemap paths `tiles/` if a reverse proxy intercepts that segment.
 
 ## What the demo needs to run
 
-| Asset | Required for paint? | Magnifier? | Full HTML diagram click? |
-|-------|---------------------|------------|---------------------------|
-| `demo/basemap/` | yes | no | no |
-| `demo/fiber_data/*.fmap` + manifest | yes | partial | no |
-| `demo/fiber_data/splice_detail/` | no | full schematic | no |
-| `demo/splice_diagrams/` (or `diagrams_url`) | no | no | **yes** |
+| Asset | Required for paint? | Magnifier? | Path trace? | Full HTML diagram click? |
+|-------|---------------------|------------|-------------|---------------------------|
+| `demo/basemap/` | yes | no | no | no |
+| `demo/fiber_data/*.fmap` + manifest | yes | partial | fmap **v3** | no |
+| `demo/fiber_data/path_index/` | no | no | **yes** | no |
+| `demo/fiber_data/splice_detail/` | no | full schematic | no | no |
+| `demo/splice_diagrams/` (or `diagrams_url`) | no | no | no | **yes** |
 
 No absolute `~/…` paths in manifests. Bake tools write `source.label` basenames
 and relative `splice_detail_url` / optional `diagrams_url`.

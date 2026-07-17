@@ -28,8 +28,9 @@
 - [x] **fiber2features** host tool in libwebmap (vendored SQLite + schema_map)
 - [x] **Fiber package recipe** (`build_fiber_package.sh`, `FIBER_DESIGN_DB`, optional diagrams)
 - [x] **fmap v3** cable GUID writer + dual parser + pick plumbing
-- [ ] path_index export + fiber path trace UI — design PR7–8
-- [ ] Demo fiber_data regen to fmap v3 — design PR6b
+- [x] **path_index export** (`export_path_index.py` → cable_to_paths + paths.jsonl)
+- [ ] Fiber path trace UI — design PR8
+- [ ] Demo fiber_data regen (fmap v3 + path_index) — design PR6b
 - [ ] Weather overlay package schema (docs) — design PR9
 - [ ] Label / glyph atlas plumbing (or explicit deferral ADR)
 - [ ] Style document (subset of MapLibre style for paint properties)

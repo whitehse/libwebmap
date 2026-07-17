@@ -10,10 +10,13 @@
 #                     demo/splice_diagrams (or next to package root's parent demo/)
 #   ZMIN ZMAX TAP_ZMIN SPLICE_ZMIN LIMIT  zoom / sample controls
 #   SKIP_SPLICE_DETAIL=1   skip magnifier JSON export
+#   SKIP_PATH_INDEX=1      skip optical path_index (needs fiber_paths tables)
+#   PATH_INDEX_LIMIT       max paths to export (0 = all)
 #   BUILD             cmake build dir (default: <repo>/build)
 #
 # Does not require a fixed sibling checkout path. Diagrams are optional —
 # paint + magnifier work without them; click-through HTML needs FIBER_DIAGRAMS_DIR.
+# Path index is optional for paint; required for path-trace UI (PR8).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -25,6 +28,8 @@ TAP_ZMIN="${TAP_ZMIN:-13}"
 SPLICE_ZMIN="${SPLICE_ZMIN:-13}"
 LIMIT="${LIMIT:-0}"
 SKIP_SPLICE_DETAIL="${SKIP_SPLICE_DETAIL:-0}"
+SKIP_PATH_INDEX="${SKIP_PATH_INDEX:-0}"
+PATH_INDEX_LIMIT="${PATH_INDEX_LIMIT:-0}"
 
 if [[ -z "${FIBER_DESIGN_DB:-}" ]]; then
   echo "error: set FIBER_DESIGN_DB to a fiber design SQLite path" >&2
@@ -72,6 +77,22 @@ if [[ "${SKIP_SPLICE_DETAIL}" != "1" ]]; then
       --manifest "${OUT}/manifest.json"
   else
     echo "warn: tools/export_splice_detail.py missing; skipping splice_detail" >&2
+  fi
+fi
+
+if [[ "${SKIP_PATH_INDEX}" != "1" ]]; then
+  if [[ -f "${ROOT}/tools/export_path_index.py" ]]; then
+    echo "export_path_index → ${OUT}/path_index"
+    PI_ARGS=("${FIBER_DESIGN_DB}" -o "${OUT}")
+    if [[ "${PATH_INDEX_LIMIT}" != "0" ]]; then
+      PI_ARGS+=(--limit "${PATH_INDEX_LIMIT}")
+    fi
+    # Soft-fail: package paint works without paths; trace UI needs them
+    if ! python3 "${ROOT}/tools/export_path_index.py" "${PI_ARGS[@]}"; then
+      echo "warn: path_index skipped (no fiber_paths or export failed)" >&2
+    fi
+  else
+    echo "warn: tools/export_path_index.py missing; skipping path_index" >&2
   fi
 fi
 
