@@ -17,7 +17,9 @@ I/O and WebGPU device management.
 ## Contents
 
 - [DOMAIN.md](DOMAIN.md) — basemap tiles, MVT/GeoFabrik, fiber/electric domain
-- [decisions/](decisions/) — Architecture Decision Records (ADRs 001–014)
+- [guides/fiber-map-data.md](guides/fiber-map-data.md) — fiber feature tables + display split
+- [decisions/](decisions/) — Architecture Decision Records (ADRs 001–017)
+- [designs/](designs/) — Design docs (data-source boundary, path-trace plan)
 - [guides/wasm.md](guides/wasm.md) — freestanding clang WASM (no Emscripten)
 - [guides/oklahoma-tiles.md](guides/oklahoma-tiles.md) — GeoFabrik Shortbread county pipeline
 
@@ -47,9 +49,14 @@ while (webmap_next_event(ctx, &ev) == 1) {
 
 ## Sibling map
 
-| Library / app | Role relative to libwebmap |
-|---------------|----------------------------|
-| **libdom** | DOM/HTML plumbing + WASM bridge patterns |
-| **libipfix / libbmp / libnetdiag** | Network forensics telemetry sources for overlays |
-| **netforensics** | Possible producer of path / outage correlated events |
-| **gfvtile2wmap** | Offline GeoFabrik VT → `.wmap` |
+Data enters libwebmap through the **three-tier boundary** (ADR-017): source
+adapters → map packages → display. This repo is primarily Tier C plus Tier B
+bake tools; vendor extractors are Tier A.
+
+| Library / app | Tier | Role relative to libwebmap |
+|---------------|------|----------------------------|
+| **libdom** | — | DOM/HTML plumbing + WASM bridge patterns |
+| **libipfix / libbmp / libnetdiag** | A (status) | Network forensics telemetry sources for overlays |
+| **netforensics** | A (status) | Possible producer of path / outage correlated events |
+| **crescentlink_export** | A | CrescentLink GPKG → design DB, path walk, optional HTML diagrams |
+| **gfvtile2wmap** | B | Offline GeoFabrik VT → `.wmap` basemap package |

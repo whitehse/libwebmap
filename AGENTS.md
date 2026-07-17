@@ -24,7 +24,9 @@ layers / GPU buffers) but implemented in C11 and compiled to WASM with
 
 ## Architecture
 
-See [ARCHITECTURE.md](ARCHITECTURE.md).
+See [ARCHITECTURE.md](ARCHITECTURE.md). Data enters through a **three-tier
+boundary** (ADR-017): source adapters → map packages → display (this library).
+Design + migration plan: [docs/designs/data-sources-display-separation.md](docs/designs/data-sources-display-separation.md).
 
 ## Build & test
 
@@ -57,8 +59,12 @@ Oklahoma county pipeline + WebGPU demo:
 
 ```bash
 # docs/guides/oklahoma-tiles.md
-./tools/prepare_demo_tiles.sh
+./tools/prepare_demo_tiles.sh   # → demo/basemap/
+# fiber data (from crescentlink_export):
+#   ./fiber2features fiber_design.sqlite -o demo/fiber_data
+#   ln -sfn ~/crescentlink_export/splice_diagrams demo/splice_diagrams
 python3 -m http.server -d demo 8765   # Chrome/Edge + WebGPU
+# fiber guide: docs/guides/fiber-map-data.md
 ```
 
 ## Session startup
@@ -105,6 +111,9 @@ python3 -m http.server -d demo 8765   # Chrome/Edge + WebGPU
 | 012 | Rural fiber + electric status map domain |
 | 013 | Strict compiler warnings |
 | 014 | Plumbing vs host renderer boundary |
+| 015 | Fiber data / display split |
+| 016 | Fiber hover magnifier + compact splice detail |
+| 017 | **Three-tier data boundary** (sources / packages / display) |
 
 ## API surface (quick)
 

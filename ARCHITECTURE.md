@@ -17,29 +17,60 @@ The library does **not** open network connections or call the WebGPU C API
 directly. The host (browser JS with `navigator.gpu`, or a native wgpu app)
 creates the device, uploads buffers, and draws.
 
+## Three-tier data boundary (ADR-017)
+
+libwebmap is **Tier C (display)**. Upstream data enters through **packages** and
+host-fed overlays — not by embedding vendor dump parsers in the C core.
+
+| Tier | Role | Examples |
+|------|------|----------|
+| **A — Source adapter** | Vendor dumps → normalized intermediates | CrescentLink GPKG → `fiber_design.sqlite` + path walk; GeoFabrik MBTiles extract; future weather adapters |
+| **B — Map package bake** | Intermediates → on-disk packages | `gfvtile2wmap` → basemap `.wmap`; fiber package `.fmap` / features / splice_detail (tools migrate under `tools/`) |
+| **C — Display** | Hold data, GPU descriptors, paint | This library + `demo/display/` |
+
+```
+Tier A                     Tier B                          Tier C
+────────                   ──────                          ──────
+CrescentLink GPKG ──► fiber_design.sqlite ──► fiber package ──► demo host
+GeoFabrik Shortbread ──► MVT/PBF ──► basemap package ──► libwebmap core
+Weather (future) ──► raw ──► weather package ──► host overlays
+```
+
+**Rules (summary):** Tier C never imports CrescentLink/GPKG types. Tier B does
+not open vendor GPKG dumps. Display formats (`.wmap`, `.fmap`, path_index,
+manifests) are owned by this repo. HTML splice diagrams and absolute sibling
+paths are optional inputs, not required for paint. Residual ECOEC CRS
+(EPSG:2267 GPKG geom) in fiber bake is documented until Tier A emits WGS84 WKB.
+
+Full decision: [docs/decisions/017-three-tier-data-boundary.md](docs/decisions/017-three-tier-data-boundary.md).  
+Design + PR plan: [docs/designs/data-sources-display-separation.md](docs/designs/data-sources-display-separation.md).
+
 ## Codemap
 
-| Path | Role |
-|------|------|
-| `include/webmap.h` | Public API: camera, tiles, overlays, events, `.wmap` |
-| `include/webmap_mvt.h` | MVT decoder API (host tool + optional native ingest) |
-| `src/webmap.c` | Context, projection, tile cache, overlays, `.wmap` I/O |
-| `src/webmap_mvt.c` | Minimal Mapbox Vector Tile protobuf decoder |
-| `tools/gfvtile2wmap/` | GeoFabrik experimental VT → `.wmap` CLI |
-| `wasm/webmap_wasm_entry.c` | Freestanding WASM export surface |
-| `wasm/webmap_wasm_rt.c` | Bump `malloc` + soft math (no Emscripten) |
-| `cmake/WasmToolchain.cmake` | clang `wasm32` toolchain (no Emscripten) |
-| `demo/` | WebGPU host (WGSL) + optional `webmap.wasm` |
-| `tools/gfvtile2wmap/` | Single-tile + `--dir` batch converter |
-| `tools/extract_oklahoma_counties.py` | MBTiles → county PBF tree |
-| `tools/prepare_demo_tiles.sh` | County PBF → demo `.wmap` + manifest |
-| `data/` | GeoFabrik Shortbread + county extracts |
-| `fixtures/tulsa_z10/` | CI fixture tile |
-| `tests/` | Smoke, frustum, polygon, Oklahoma fixture |
-| `docs/DOMAIN.md` | Domain: tiles, utilities, status semantics |
-| `docs/decisions/` | ADRs |
-| `docs/guides/` | WASM + Oklahoma tile guides |
-| `TODO.md` | Living progress tracker |
+| Path | Role | Tier |
+|------|------|------|
+| `include/webmap.h` | Public API: camera, tiles, overlays, events, `.wmap` | C |
+| `include/webmap_mvt.h` | MVT decoder API (host tool + optional native ingest) | B/C |
+| `src/webmap.c` | Context, projection, tile cache, overlays, `.wmap` I/O | C |
+| `src/webmap_mvt.c` | Minimal Mapbox Vector Tile protobuf decoder | B |
+| `tools/gfvtile2wmap/` | GeoFabrik experimental VT → `.wmap` CLI | B |
+| `wasm/webmap_wasm_entry.c` | Freestanding WASM export surface | C |
+| `wasm/webmap_wasm_rt.c` | Bump `malloc` + soft math (no Emscripten) | C |
+| `cmake/WasmToolchain.cmake` | clang `wasm32` toolchain (no Emscripten) | — |
+| `demo/` | WebGPU host (WGSL) + optional `webmap.wasm` | C |
+| `demo/display/` | Fiber paint: style, .fmap parse, symbols, hover magnifier | C |
+| `tools/export_splice_detail.py` | fiber_design → compact per-SP JSON for magnifier | B |
+| `tools/gfvtile2wmap/` | Single-tile + `--dir` batch converter | B |
+| `tools/extract_oklahoma_counties.py` | MBTiles → county PBF tree (→ basemap pipeline) | A/B |
+| `tools/prepare_demo_tiles.sh` | County PBF → demo `.wmap` + manifest | B |
+| `data/` | GeoFabrik Shortbread + county extracts | inputs |
+| `fixtures/tulsa_z10/` | CI fixture tile | — |
+| `tests/` | Smoke, frustum, polygon, Oklahoma fixture | — |
+| `docs/DOMAIN.md` | Domain: tiles, utilities, status semantics | — |
+| `docs/decisions/` | ADRs | — |
+| `docs/designs/` | Design docs (boundary, path trace plan) | — |
+| `docs/guides/` | WASM + Oklahoma tile + fiber data guides | — |
+| `TODO.md` | Living progress tracker | — |
 
 ## Module map (maplibre-rs analogue)
 
@@ -74,14 +105,25 @@ creates the device, uploads buffers, and draws.
 
 ## Data flow
 
-### Basemap
+### Basemap (Tier A extract → Tier B package → Tier C)
 
-1. Offline: `gfvtile2wmap` reads GeoFabrik experimental vector tiles (MVT `.pbf`).
-2. Geometry is decoded, vertices colored by layer heuristics, packed into `.wmap`.
-3. Runtime: host loads `.wmap` bytes and calls `webmap_load_wmap_tile`.
+1. **Source (A):** GeoFabrik Shortbread / MVT extract → `{z}/{x}/{y}.pbf` tree.
+2. **Package (B):** `gfvtile2wmap` decodes MVT, colors by layer heuristics, packs `.wmap`.
+3. **Display (C):** host loads `.wmap` bytes → `webmap_load_wmap_tile`.
 4. Host calls `webmap_get_tile_layers` and uploads `vertices` / `indices` to GPUBuffer.
 
-### Dynamic status (fiber + electric)
+### Fiber design package (Tier A design DB → Tier B package → Tier C host)
+
+1. **Source (A):** Vendor adapter (today: crescentlink_export) writes
+   `fiber_design.sqlite` and optional optical path tables / HTML diagrams.
+2. **Package (B):** Bake tools produce a fiber package: `.fmap` tiles,
+   `features.sqlite`, optional `splice_detail/`, path_index (planned), manifest.
+   Map-facing bake tools are owned by this repo (some still live in the adapter
+   until the move PRs land — see ADR-017).
+3. **Display (C):** `demo/display/` paints features; core may also take status
+   overlays via `webmap_upsert_overlay`.
+
+### Dynamic status (fiber + electric overlays)
 
 1. Upstream systems produce feature updates (span id, status, lon/lat path).
 2. Host calls `webmap_upsert_overlay` (no network inside libwebmap).
@@ -121,10 +163,22 @@ GPU build uses Web Mercator meters relative to camera center instead.
 ## Relationship to sibling software
 
 ```
-GeoFabrik MVT ──gfvtile2wmap──► .wmap tiles ──► libwebmap (WASM)
-netforensics / CPE / inventory ──status events──► overlays ──► libwebmap
-libwebmap GPU descs ──host WebGPU──► status map UI
+                    ┌─ Tier A (adapters) ─────────────────────────────┐
+GeoFabrik Shortbread │  MBTiles / MVT extract                         │
+crescentlink_export  │  GPKG → fiber_design.sqlite (+ path walk, HTML)│
+netforensics / CPE   │  status / telemetry events                     │
+weather (future)     │  alerts / wind feeds                           │
+                    └──────────────────┬──────────────────────────────┘
+                                       ▼
+                    ┌─ Tier B (packages / bake tools) ────────────────┐
+                    │  .wmap basemap · .fmap fiber · overlays schema  │
+                    └──────────────────┬──────────────────────────────┘
+                                       ▼
+                    ┌─ Tier C (this repo display) ────────────────────┐
+                    │  libwebmap C/WASM · demo host WebGPU · paint    │
+                    └─────────────────────────────────────────────────┘
 ```
 
 Rural operators view fiber spans, nodes, CPEs and electric lines, poles,
 substations with shared customer context (many customers have both services).
+Vendor design tools are adapters; **libwebmap displays packages and status**.

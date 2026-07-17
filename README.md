@@ -65,6 +65,7 @@ cp build-wasm/webmap.wasm demo/
 | [docs/README.md](docs/README.md) | Documentation index |
 | [docs/DOMAIN.md](docs/DOMAIN.md) | Tiles, utility domain, status semantics |
 | [docs/decisions/](docs/decisions/) | Architecture Decision Records |
+| [docs/designs/](docs/designs/) | Design docs (data boundary, path trace) |
 | [TODO.md](TODO.md) | Remaining implementation work |
 
 ## License

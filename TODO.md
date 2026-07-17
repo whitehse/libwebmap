@@ -21,6 +21,14 @@
 
 ## Medium priority
 
+- [x] Fiber hover magnifier (dwell + schematic + `splice_detail/` JSON)
+- [x] **ADR-017 three-tier data boundary** (sources / packages / display)
+- [ ] Format ownership docs (`.fmap`, packages, fiber-design-input CRS) — design PR2
+- [ ] Promote Shortbread scripts to `tools/basemap_pipeline/` — design PR3
+- [ ] Move `fiber2features` into libwebmap tools — design PR4
+- [ ] Decouple demo from absolute crescentlink paths — design PR5
+- [ ] fmap v3 cable GUID + path_index + fiber path trace UI — design PR6–8
+- [ ] Weather overlay package schema (docs) — design PR9
 - [ ] Label / glyph atlas plumbing (or explicit deferral ADR)
 - [ ] Style document (subset of MapLibre style for paint properties)
 - [ ] Overlay spatial index for large feature counts
