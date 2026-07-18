@@ -5,11 +5,19 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
-option(WEBMAP_BUILD_TOOLS "Build host utilities (gfvtile2wmap, fiber2features)" ON)
+option(WEBMAP_BUILD_TOOLS "Build host utilities (gfvtile2wmap, fiber2features, splice_diagram)" ON)
 option(WEBMAP_BUILD_TESTS "Build unit tests" ON)
 option(WEBMAP_BUILD_WASM "Build freestanding WASM module (clang, no Emscripten)" OFF)
 option(WEBMAP_BUILD_FUZZ "Build libFuzzer harness" OFF)
 option(WEBMAP_BUILD_DEMO "Copy WebGPU demo assets into build/demo" ON)
+
+# Optional fiber design DB for generating splice HTML into demo/splice_diagrams/
+set(FIBER_DESIGN_DB "" CACHE FILEPATH
+    "Normalized fiber design SQLite (Tier A). When set, enables splice_diagrams target.")
+set(SPLICE_DIAGRAMS_OUT "${CMAKE_SOURCE_DIR}/demo/splice_diagrams" CACHE PATH
+    "Output directory for generated HTML splice diagrams (real dir, not symlink).")
+set(SPLICE_DIAGRAMS_LIMIT "0" CACHE STRING
+    "Max diagrams to generate (0 = all). Useful for smoke tests.")
 
 if(NOT MSVC)
     add_compile_options(-Wall -Wextra -Wpedantic -Werror)
@@ -33,18 +41,20 @@ if(WEBMAP_BUILD_TOOLS AND NOT WEBMAP_BUILD_WASM)
     add_executable(gfvtile2wmap tools/gfvtile2wmap/main.c)
     target_link_libraries(gfvtile2wmap PRIVATE webmap)
 
+    # Shared vendored SQLite amalgamation for host tools (not WASM).
+    set(WEBMAP_SQLITE_SRC tools/third_party/sqlite/sqlite3.c)
+    set_source_files_properties(${WEBMAP_SQLITE_SRC} PROPERTIES
+        COMPILE_OPTIONS "-w"
+    )
+
     # fiber2features: design DB → .fmap package (vendored SQLite amalgamation)
     add_executable(fiber2features
         tools/fiber2features/fiber2features.c
         tools/fiber2features/schema_map_sql.c
-        tools/third_party/sqlite/sqlite3.c
+        ${WEBMAP_SQLITE_SRC}
     )
     target_include_directories(fiber2features PRIVATE
         tools/third_party/sqlite
-    )
-    # SQLite amalgamation is third-party; do not fail the build on its warnings.
-    set_source_files_properties(tools/third_party/sqlite/sqlite3.c PROPERTIES
-        COMPILE_OPTIONS "-w"
     )
     # Amalgamation uses a few POSIX bits; fiber2features is host-only.
     target_compile_definitions(fiber2features PRIVATE
@@ -55,6 +65,42 @@ if(WEBMAP_BUILD_TOOLS AND NOT WEBMAP_BUILD_WASM)
     # fiber2features.c enables _POSIX_C_SOURCE; relax pedantic for that TU only
     set_source_files_properties(tools/fiber2features/fiber2features.c PROPERTIES
         COMPILE_OPTIONS "-Wno-pedantic"
+    )
+
+    # splice_diagram: design DB → self-contained HTML per splicepoint
+    add_executable(splice_diagram
+        tools/splice_diagram/splice_diagram.c
+        tools/splice_diagram/splice_diagram_cli.c
+        ${WEBMAP_SQLITE_SRC}
+    )
+    target_include_directories(splice_diagram PRIVATE
+        tools/third_party/sqlite
+        tools/splice_diagram
+    )
+    target_compile_definitions(splice_diagram PRIVATE
+        SQLITE_THREADSAFE=0
+        SQLITE_OMIT_LOAD_EXTENSION=1
+    )
+    target_link_libraries(splice_diagram PRIVATE m)
+    # strcasecmp / strings.h (POSIX); host-only tool
+    set_source_files_properties(
+        tools/splice_diagram/splice_diagram.c
+        tools/splice_diagram/splice_diagram_cli.c
+        PROPERTIES COMPILE_OPTIONS "-Wno-pedantic"
+    )
+
+    # Generate real demo/splice_diagrams/ content (not a symlink).
+    # Requires -DFIBER_DESIGN_DB=/path/to/fiber_design.sqlite
+    add_custom_target(splice_diagrams
+        COMMAND ${CMAKE_COMMAND}
+            -DFIBER_DESIGN_DB=${FIBER_DESIGN_DB}
+            -DSPLICE_DIAGRAMS_OUT=${SPLICE_DIAGRAMS_OUT}
+            -DSPLICE_DIAGRAMS_LIMIT=${SPLICE_DIAGRAMS_LIMIT}
+            -DSPLICE_DIAGRAM_BIN=$<TARGET_FILE:splice_diagram>
+            -P ${CMAKE_SOURCE_DIR}/cmake/GenerateSpliceDiagrams.cmake
+        DEPENDS splice_diagram
+        COMMENT "Generate HTML splice diagrams → ${SPLICE_DIAGRAMS_OUT}"
+        VERBATIM
     )
 endif()
 
@@ -125,11 +171,25 @@ endif()
 
 # ── Demo assets ──────────────────────────────────────────────────────
 if(WEBMAP_BUILD_DEMO AND NOT WEBMAP_BUILD_WASM)
+    # Copy demo sources into build/demo, but do not re-copy multi-GB regenerable
+    # trees (splice_diagrams, fiber_data bulk). Symlink those when present so
+    # `python3 -m http.server -d build/demo` still resolves diagrams_url.
+    set(_WEBMAP_DEMO_DST ${CMAKE_BINARY_DIR}/demo)
+    set(_WEBMAP_DEMO_SRC ${CMAKE_SOURCE_DIR}/demo)
     add_custom_target(webmap_demo ALL
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/demo
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${_WEBMAP_DEMO_DST}
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${_WEBMAP_DEMO_SRC}/index.html ${_WEBMAP_DEMO_DST}/index.html
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${_WEBMAP_DEMO_SRC}/main.js ${_WEBMAP_DEMO_DST}/main.js
         COMMAND ${CMAKE_COMMAND} -E copy_directory
-                ${CMAKE_SOURCE_DIR}/demo ${CMAKE_BINARY_DIR}/demo
-        COMMENT "Copy WebGPU demo to build/demo"
+                ${_WEBMAP_DEMO_SRC}/display ${_WEBMAP_DEMO_DST}/display
+        COMMAND ${CMAKE_COMMAND}
+            -DDEMO_SRC=${_WEBMAP_DEMO_SRC}
+            -DDEMO_DST=${_WEBMAP_DEMO_DST}
+            -P ${CMAKE_SOURCE_DIR}/cmake/LinkDemoData.cmake
+        COMMENT "Stage WebGPU demo into build/demo"
+        VERBATIM
     )
 endif()
 
@@ -153,6 +213,9 @@ if(TARGET fiber2features)
     install(TARGETS fiber2features RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
     install(FILES tools/schema/schema_map.sql
             DESTINATION ${CMAKE_INSTALL_DATADIR}/webmap)
+endif()
+if(TARGET splice_diagram)
+    install(TARGETS splice_diagram RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif()
 if(TARGET webmap_wasm)
     install(TARGETS webmap_wasm DESTINATION ${CMAKE_INSTALL_LIBDIR})

@@ -39,10 +39,13 @@ webmap_destroy(ctx);
 python3 tools/basemap_pipeline/extract_region.py
 ./tools/basemap_pipeline/build_package.sh
 
-# Fiber: design SQLite → demo/fiber_data/ (docs/guides/fiber-map-data.md)
+# Fiber: design SQLite → demo/fiber_data/ + demo/splice_diagrams/
+# (docs/guides/fiber-map-data.md)
 # export FIBER_DESIGN_DB=/path/to/fiber_design.sqlite
-# export FIBER_DIAGRAMS_DIR=/path/to/splice_diagrams   # optional
 # ./tools/build_fiber_package.sh
+# Or diagrams only:
+# cmake -B build -S . -DFIBER_DESIGN_DB=/path/to/fiber_design.sqlite
+# cmake --build build --target splice_diagrams
 
 python3 -m http.server -d demo 8765
 ```
@@ -51,6 +54,7 @@ python3 -m http.server -d demo 8765
 ./build/gfvtile2wmap -z 10 -x 238 -y 401 path/to/tile.pbf -o tile.wmap
 ./build/gfvtile2wmap --dir data/oklahoma_counties_pbf -o out --zmin 8 --zmax 10
 ./build/fiber2features "$FIBER_DESIGN_DB" -o demo/fiber_data --zmin 10 --zmax 14
+./build/splice_diagram --all -o demo/splice_diagrams "$FIBER_DESIGN_DB"
 ```
 
 ### WASM (clang only, no Emscripten)

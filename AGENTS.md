@@ -64,8 +64,10 @@ python3 tools/basemap_pipeline/extract_region.py
 
 # Fiber package (docs/guides/fiber-map-data.md) — any design DB path
 #   export FIBER_DESIGN_DB=/path/to/fiber_design.sqlite
-#   export FIBER_DIAGRAMS_DIR=/path/to/splice_diagrams   # optional HTML
-#   ./tools/build_fiber_package.sh                     # → demo/fiber_data/
+#   ./tools/build_fiber_package.sh                     # → demo/fiber_data/ + splice_diagrams/
+# Or diagrams only via CMake:
+#   cmake -B build -S . -DFIBER_DESIGN_DB=/path/to/fiber_design.sqlite
+#   cmake --build build --target splice_diagrams       # → demo/splice_diagrams/
 
 python3 -m http.server -d demo 8765   # Chrome/Edge + WebGPU
 ```
@@ -119,7 +121,8 @@ python3 -m http.server -d demo 8765   # Chrome/Edge + WebGPU
 | 017 | **Three-tier data boundary** (sources / packages / display) |
 | 018 | Fiber path visual trace (host highlight + path_index) |
 
-Host tools also include **`fiber2features`** (design DB → `.fmap` package) and
+Host tools also include **`fiber2features`** (design DB → `.fmap` package),
+**`splice_diagram`** (design DB → HTML under `demo/splice_diagrams/`), and
 **`gfvtile2wmap`** (MVT → `.wmap`).
 
 ## API surface (quick)

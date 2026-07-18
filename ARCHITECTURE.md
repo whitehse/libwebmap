@@ -25,7 +25,7 @@ host-fed overlays — not by embedding vendor dump parsers in the C core.
 | Tier | Role | Examples |
 |------|------|----------|
 | **A — Source adapter** | Vendor dumps → normalized intermediates | CrescentLink GPKG → `fiber_design.sqlite` + path walk; GeoFabrik MBTiles extract; future weather adapters |
-| **B — Map package bake** | Intermediates → on-disk packages | `gfvtile2wmap` → basemap `.wmap`; fiber package `.fmap` / features / splice_detail (tools migrate under `tools/`) |
+| **B — Map package bake** | Intermediates → on-disk packages | `gfvtile2wmap` → basemap `.wmap`; `fiber2features` / `splice_diagram` / splice_detail / path_index under `tools/` |
 | **C — Display** | Hold data, GPU descriptors, paint | This library + `demo/display/` |
 
 ```
@@ -62,7 +62,8 @@ Design + PR plan: [docs/designs/data-sources-display-separation.md](docs/designs
 | `demo/display/` | Fiber paint: style, .fmap parse, symbols, hover magnifier | C |
 | `tools/export_splice_detail.py` | design DB → compact per-SP JSON for magnifier | B |
 | `tools/export_path_index.py` | design DB `fiber_paths` → path_index/ browser files | B |
-| `tools/build_fiber_package.sh` | One-shot fiber package (`FIBER_DESIGN_DB`, optional diagrams) | B |
+| `tools/build_fiber_package.sh` | One-shot fiber package (`FIBER_DESIGN_DB` + diagrams) | B |
+| `tools/splice_diagram/` | design DB → HTML `demo/splice_diagrams/` (CMake target) | B |
 | `tools/gfvtile2wmap/` | Single-tile + `--dir` batch converter | B |
 | `tools/basemap_pipeline/` | Shortbread MBTiles → PBF → basemap package | A/B |
 | `tools/fiber2features/` | Design DB → `.fmap` fiber package (vendored SQLite) | B |

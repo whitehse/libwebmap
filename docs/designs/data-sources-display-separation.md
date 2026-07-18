@@ -35,7 +35,7 @@ After that boundary is in place, **individual optical-fiber path highlighting** 
 | CrescentLink GPKG → `fiber_design.sqlite` | `crescentlink_export/export_fiber_design*` | Vendor XML/GPKG |
 | Optical path walk | `crescentlink_export/trace_fiber_paths.py` | Needs full connectivity graph |
 | Design → map features (`.fmap`) | `crescentlink_export/fiber2features.c` | Design DB + **EPSG:2267 GPKG geom** → display format |
-| Splice HTML | `crescentlink_export/splice_diagram` | Design DB (~GB of HTML) |
+| Splice HTML | libwebmap `tools/splice_diagram` (CMake) | Design DB (~GB of HTML) |
 | Compact magnifier JSON | `libwebmap/tools/export_splice_detail.py` | Design DB → demo package |
 | Basemap Shortbread → `.wmap` | `libwebmap/tools/{extract_*,gfvtile2wmap,prepare_demo_tiles.sh}` | OSM/GeoFabrik only |
 | Fiber paint / pick / magnifier | `libwebmap/demo/display/*` | Consumes `.fmap` + detail JSON; cable pick has **no plant GUID** |
@@ -47,7 +47,8 @@ Demo regeneration (from `docs/guides/fiber-map-data.md`) hard-wires:
 cd ~/crescentlink_export
 ./fiber2features fiber_design_test.sqlite -o ~/libwebmap/demo/fiber_data ...
 python3 ~/libwebmap/tools/export_splice_detail.py ...
-ln -sfn ~/crescentlink_export/splice_diagrams ~/libwebmap/demo/splice_diagrams
+# Generated (real dir, not symlink):
+# cmake -B build -S . -DFIBER_DESIGN_DB=… && cmake --build build --target splice_diagrams
 ```
 
 The fiber package manifest itself records absolute source paths:
@@ -166,7 +167,7 @@ flowchart TB
 |----------|----------|-----------|
 | `export_fiber_design*` | **Stay in crescentlink_export** | Vendor GPKG + libxml2 + SDM XML |
 | `trace_fiber_paths.py` | **Stay in crescentlink_export** | Connectivity graph walk; intermediate tables, not map tiles |
-| `splice_diagram` | **Stay in crescentlink_export** | Large HTML product; optional package input via `diagrams_url` / `FIBER_DIAGRAMS_DIR` |
+| `splice_diagram` | **libwebmap `tools/` + CMake target `splice_diagrams`** | Design DB → real `demo/splice_diagrams/`; optional via `diagrams_url` |
 | `fiber2features` | **Move to libwebmap `tools/fiber2features/`** | Outputs `.fmap` + map tables — display formats owned by libwebmap (ADR-015) |
 | `export_splice_detail.py` | **Already in libwebmap** — keep | Design DB → package-side JSON for host |
 | Path-index export (new) | **libwebmap `tools/export_path_index.py`** | Map-facing index; joins to display |
@@ -392,7 +393,8 @@ Status string → enum: `unknown|ok|degraded|down|maint` → `WEBMAP_STATUS_*`. 
 
 - `diagrams_url` is **optional**. If missing or 404, click on tap/splice is a no-op (or toast “diagrams not installed”); magnifier + path trace still work.
 - Demo **must** run with only: basemap package + fiber package (fmap + optional path_index + optional splice_detail)—**no second git tree required**.
-- Operator installs diagrams separately: `FIBER_DIAGRAMS_DIR=/path/to/html` or copy/symlink into `demo/splice_diagrams` / URL in manifest.
+- Operator generates diagrams with CMake (`splice_diagrams` target) or
+  `build_fiber_package.sh` into a real `demo/splice_diagrams/` directory.
 - `diagram_index.json` and `diagram` basenames remain produced by `fiber2features` (stable string contract); HTML files remain Tier A artifacts.
 
 **Zero hard dependency** on CrescentLink GPKG paths, `xmlEquipment`, or absolute home-directory paths in manifests. Bake tools **must not write absolute `input` paths by default**; use `source.label` + optional `source.input_fingerprint` (sha256 of design DB).
@@ -417,7 +419,7 @@ demo/
     path_index.sqlite          # offline optional
     {z}/{x}/{y}.fmap
     splice_detail/<guid>.json
-  splice_diagrams/             # OPTIONAL external; often gitignored symlink
+  splice_diagrams/             # OPTIONAL generated real dir (gitignored)
 ```
 
 Abstract layout for docs: `docs/formats/data-packages.md` describes the same shape under any root.
@@ -498,7 +500,7 @@ When diagrams are installed locally, set `"diagrams_url": "./splice_diagrams/"` 
 
 | Doc / entry | Change |
 |-------------|--------|
-| `AGENTS.md` | Split basemap package / fiber package / run demo. `FIBER_DESIGN_DB`, optional `FIBER_DIAGRAMS_DIR`. No required `~/crescentlink_export` layout. |
+| `AGENTS.md` | Split basemap package / fiber package / run demo. `FIBER_DESIGN_DB`, CMake `splice_diagrams`. No required `~/crescentlink_export` layout. |
 | `ARCHITECTURE.md` | Three-tier diagram; tools list; CRS honesty note. |
 | `docs/guides/fiber-map-data.md` | Tier A/B/C; path index; diagram optional; single primary rewrite after ADR (avoid thrash—see PR plan). |
 | `docs/guides/oklahoma-tiles.md` | Basemap adapter example + new manifest fields. |
@@ -738,7 +740,7 @@ Optional later: `webmap_upsert_overlay` with a dedicated class—non-blocking.
 
 ```bash
 export FIBER_DESIGN_DB=/path/to/fiber_design.sqlite   # any location
-export FIBER_DIAGRAMS_DIR=/path/to/splice_diagrams    # optional
+# diagrams: cmake --build build --target splice_diagrams  (or via package script)
 
 ./tools/build_fiber_package.sh \
   --design "$FIBER_DESIGN_DB" \
@@ -870,7 +872,7 @@ Core remains syscall-free.
 
 ### Phase 2 — Package layout + demo decoupling
 
-- Manifests; `FIBER_DESIGN_DB` / `FIBER_DIAGRAMS_DIR`; diagrams optional.
+- Manifests; `FIBER_DESIGN_DB`; diagrams via CMake `splice_diagrams` (optional).
 
 ### Phase 3 — fmap v3 + path_index + fixtures + UI
 
@@ -918,14 +920,14 @@ Core remains syscall-free.
 |---|----------|-----------|
 | K1 | **Three tiers: source adapter → map package → display** | Ownership testable; matches ADR-014/015 |
 | K2 | **libwebmap owns display formats** (`.wmap`, `.fmap`, splice_detail, path_index, manifests) | Specs live with consumers |
-| K3 | **crescentlink_export stays vendor extractor + path tracer + HTML diagrams** | GPKG/XML/graph not map-engine |
+| K3 | **crescentlink_export stays vendor extractor + path tracer**; HTML diagrams bake in libwebmap | GPKG/XML/graph not map-engine |
 | K4 | **`fiber2features` moves into libwebmap `tools/`** with CMake + **vendored SQLite amalgamation**; residual ECOEC/CRS coupling **documented**, not claimed multi-vendor | Format ownership without pretending geom neutrality |
 | K5 | **No new `map_data` repo for v1** | Two trees enough |
 | K6 | **Promote Shortbread scripts to `tools/basemap_pipeline/`** | Named basemap adapter |
 | K7 | **Path trace v1 = precomputed index + host highlight; no WASM graph walk** | Reuse `fiber_paths` |
 | K8 | **`.fmap` v3 adds cable GUID** on spans; full writer/parser/pick checklist | Join key for path_index |
 | K9 | **Weather/wind are overlay packages later; not core layers** | ADR-014; mapping table in format doc |
-| K10 | **Demo uses `FIBER_DESIGN_DB` + optional `FIBER_DIAGRAMS_DIR`; bake tools never write absolute paths by default** | Decouple from `~/crescentlink_export` layout |
+| K10 | **Demo uses `FIBER_DESIGN_DB`; diagrams via CMake `splice_diagrams` (real dir); bake tools never write absolute paths by default** | Decouple from `~/crescentlink_export` layout |
 | K11 | **Browser path_index default = `cable_to_paths.json` + `paths.jsonl`** (+ optional `path_index.sqlite` offline). Not 21k micro-files. ECOEC ~12–20 MB / 21k paths | Avoid inode storm; fits static demo |
 | K12 | **Host tools use vendored SQLite amalgamation under `tools/third_party/sqlite/`; not linked into WASM** | Portable CI; matches prior Makefile |
 | K13 | **v1 path highlight is host-drawn WebGPU (fiber line path), not `webmap_upsert_overlay`** | No C API change; matches existing fiber meshes |
@@ -1011,7 +1013,7 @@ Incremental, independently reviewable PRs. Dependency-respecting; **data fixture
 
 | | |
 |--|--|
-| **Title** | docs/demo: FIBER_DESIGN_DB, FIBER_DIAGRAMS_DIR, relative manifests |
+| **Title** | docs/demo: FIBER_DESIGN_DB, splice_diagrams CMake target, relative manifests |
 | **Affects** | AGENTS, fiber-map-data **full** rewrite, README, `tools/build_fiber_package.sh`, export_splice_detail path examples |
 | **Depends on** | PR4a |
 | **Description** | Single recipe; no absolute input paths; diagrams optional for demo run. |
@@ -1092,7 +1094,7 @@ PR1 ──► PR2 ──► PR4a ──► PR4b ──► PR10
 |------|------|------|
 | `export_fiber_design` | A | crescentlink_export |
 | `trace_fiber_paths.py` | A | crescentlink_export |
-| `splice_diagram` | A (optional HTML artifact) | crescentlink_export |
+| `splice_diagram` | B (optional HTML artifact) | libwebmap `tools/splice_diagram` |
 | `export_mcd_strands.py` | A | crescentlink_export |
 | `fiber2features` | B | libwebmap/tools (+ crescentlink hard wrapper only) |
 | `export_splice_detail.py` | B | libwebmap/tools |
@@ -1111,7 +1113,7 @@ PR1 ──► PR2 ──► PR4a ──► PR4b ──► PR10
 - [ ] `fiber2features` builds from libwebmap CMake with vendored SQLite; DDL from `schema_map.sql`
 - [ ] crescentlink hard-wraps fiber2features (no second C tree)
 - [ ] Demo recipe: `FIBER_DESIGN_DB` only required for regen; runtime demo needs no crescentlink tree for paint/trace
-- [ ] Diagrams optional (`FIBER_DIAGRAMS_DIR` / `diagrams_url`)
+- [x] Diagrams optional (CMake `splice_diagrams` / `diagrams_url`; real dir)
 - [ ] fmap v3 fixtures + parse smoke; path_index export dry-run on synthetic DB
 - [ ] Path trace: click cable → highlight using `cable_to_paths.json` + `paths.jsonl`
 - [ ] Weather package schema + mapping table documented

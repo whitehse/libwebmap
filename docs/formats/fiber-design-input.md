@@ -120,10 +120,15 @@ Tier B **must not** require:
 
 Those remain Tier A concerns.
 
-## Related source (adapter tree)
+## Related source
 
-Until tools move, see sibling `crescentlink_export/`:
+**Tier A** (adapter tree, e.g. sibling `crescentlink_export/`):
 
-- `schema.sql`, `schema_paths.sql`, `schema_map.sql`
-- `export_fiber_design`, `trace_fiber_paths.py`, `fiber2features.c`
-- `splice_diagram` (HTML; optional package input via `diagrams_url`)
+- `schema.sql`, `schema_paths.sql`
+- `export_fiber_design`, `trace_fiber_paths.py`
+
+**Tier B** (this repo):
+
+- `tools/schema/schema_map.sql`, `tools/fiber2features/`
+- `tools/splice_diagram/` — HTML diagrams via CMake target `splice_diagrams`
+  (`demo/splice_diagrams/`, optional via `diagrams_url`)

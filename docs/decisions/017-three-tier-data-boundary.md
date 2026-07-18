@@ -35,8 +35,8 @@ split. Full design and PR plan: [docs/designs/data-sources-display-separation.md
 
 | Tier | Responsibility | I/O | Examples (today / target) |
 |------|----------------|-----|---------------------------|
-| **A — Source adapter** | Parse vendor dumps; normalize connectivity and raw geospatial | Files, GDAL, libxml2, optional network | CrescentLink `export_fiber_design`, `trace_fiber_paths.py`, `splice_diagram`; GeoFabrik MBTiles extract; future weather adapters |
-| **B — Map package bake** | Produce **display packages** from a documented intermediate schema | Host tools only (files) | `gfvtile2wmap`, `export_splice_detail.py`, basemap pipeline; target: `fiber2features`, `export_path_index` under libwebmap `tools/` |
+| **A — Source adapter** | Parse vendor dumps; normalize connectivity and raw geospatial | Files, GDAL, libxml2, optional network | CrescentLink `export_fiber_design`, `trace_fiber_paths.py`; GeoFabrik MBTiles extract; future weather adapters |
+| **B — Map package bake** | Produce **display packages** from a documented intermediate schema | Host tools only (files) | `gfvtile2wmap`, `fiber2features`, `splice_diagram`, `export_splice_detail.py`, `export_path_index`, basemap pipeline |
 | **C — Display** | Hold map data, GPU descriptors, paint, interaction | Core: **no syscalls**; host: fetch + WebGPU | `libwebmap` C/WASM, `demo/display/` |
 
 ```
@@ -56,18 +56,20 @@ Weather (future) ──► raw feed ──► weather package ──► host ove
    inputs.
 3. **libwebmap owns display formats** (`.wmap`, `.fmap`, splice_detail,
    path_index, package manifests). Specs live with consumers (this repo).
-4. **crescentlink_export (or successor) is a Tier A adapter** — GPKG/XML export,
-   optical path graph walk, optional HTML splice diagrams — not the map engine.
+4. **crescentlink_export (or successor) is a Tier A adapter** — GPKG/XML export
+   and optical path graph walk — not the map engine. HTML splice diagrams are
+   Tier B (`splice_diagram` in libwebmap), generated from the design DB.
 5. **No third `map_data` repository for v1.** Map-facing bake tools live under
-   libwebmap `tools/` once moved; crescentlink may hard-wrap them after the move
+   libwebmap `tools/`; crescentlink may hard-wrap them after the move
    (implementation PRs follow this ADR).
 6. **Weather / wind** are future overlay **packages** (and host paint), not C-core
    tile layers or in-library network ingest.
 7. **Demo decoupling target:** regenerate fiber packages from an env-pointed
    design DB (`FIBER_DESIGN_DB`); bake tools must not write absolute source paths
-   by default. HTML splice diagrams are **optional** package inputs
-   (`FIBER_DIAGRAMS_DIR` / `diagrams_url`); paint and path-trace demos must work
-   without a second git tree checked out.
+   by default. HTML splice diagrams are **optional** generated package inputs
+   (CMake target `splice_diagrams` / `build_fiber_package.sh` → real
+   `demo/splice_diagrams/` + `diagrams_url`); paint and path-trace demos must
+   work without diagrams or a second git tree checked out.
 8. **CRS honesty:** Until Tier A emits WGS84 WKB, Tier B may still understand
    CrescentLink-normalized ECOEC geometry (GeoPackage binary, EPSG:2267). That
    residual coupling is **documented**, not claimed multi-vendor-ready. Long-term
@@ -77,12 +79,13 @@ Weather (future) ──► raw feed ──► weather package ──► host ove
 
 | Artifact | Tier | Home (target) |
 |----------|------|----------------|
-| `export_fiber_design*`, `trace_fiber_paths.py`, `splice_diagram` | A | crescentlink_export |
+| `export_fiber_design*`, `trace_fiber_paths.py` | A | crescentlink_export |
 | GeoFabrik / Shortbread extract → PBF | A (+ bake entry) | libwebmap basemap pipeline (promote scripts) |
-| `gfvtile2wmap`, MVT decoder | B | libwebmap (already) |
-| `export_splice_detail.py` | B | libwebmap (already) |
-| `fiber2features` → `.fmap` + `features.sqlite` | B | **move** to libwebmap `tools/` |
-| Path-index export | B | **new** libwebmap `tools/` |
+| `gfvtile2wmap`, MVT decoder | B | libwebmap |
+| `export_splice_detail.py` | B | libwebmap |
+| `fiber2features` → `.fmap` + `features.sqlite` | B | libwebmap `tools/` |
+| `splice_diagram` → HTML under `demo/splice_diagrams/` | B | libwebmap `tools/` (CMake target `splice_diagrams`) |
+| Path-index export | B | libwebmap `tools/` |
 | `fiber2wmap` | B legacy | crescentlink until retired |
 | C/WASM core + `demo/display/` | C | libwebmap |
 

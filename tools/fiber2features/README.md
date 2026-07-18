@@ -24,8 +24,8 @@ Prefer the package recipe (manifest polish + optional diagrams + splice_detail):
 
 ```bash
 export FIBER_DESIGN_DB=/path/to/fiber_design.sqlite
-# export FIBER_DIAGRAMS_DIR=/path/to/html   # optional
 ./tools/build_fiber_package.sh
+# also generates demo/splice_diagrams/ (real dir) unless SKIP_DIAGRAMS=1
 ```
 
 Low-level:
@@ -37,7 +37,7 @@ Low-level:
 
 Options: `--bbox W,S,E,N`, `--limit N`, `--extent`, `-q`.  
 Manifest `diagrams_url` defaults to `null`; `build_fiber_package.sh` sets
-`./splice_diagrams/` when diagrams are installed.
+`./splice_diagrams/` when HTML diagrams were generated.
 
 ## Regenerate embedded schema
 

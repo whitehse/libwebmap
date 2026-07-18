@@ -26,7 +26,7 @@ demo/
       meta.json
       cable_to_paths.json
       paths.jsonl
-  splice_diagrams/             # OPTIONAL external HTML; often a symlink
+  splice_diagrams/             # OPTIONAL HTML; generated real dir (gitignored)
 ```
 
 Abstract layout is the same under any root; `demo/` is the package *instance*

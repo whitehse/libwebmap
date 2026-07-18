@@ -6,8 +6,10 @@
 #
 # Optional:
 #   OUT               package root (default: demo/fiber_data)
-#   FIBER_DIAGRAMS_DIR  HTML splice diagrams directory to symlink as
-#                     demo/splice_diagrams (or next to package root's parent demo/)
+#   DIAGRAMS_OUT      HTML splice diagram directory (default: <demo>/splice_diagrams)
+#                     Generated as a real directory (not a symlink).
+#   SKIP_DIAGRAMS=1   skip HTML diagram generation
+#   DIAGRAMS_LIMIT    max diagrams (0 = all; passed to splice_diagram --limit)
 #   ZMIN ZMAX TAP_ZMIN SPLICE_ZMIN LIMIT  zoom / sample controls
 #   SKIP_SPLICE_DETAIL=1   skip magnifier JSON export
 #   SKIP_PATH_INDEX=1      skip optical path_index (needs fiber_paths tables)
@@ -15,8 +17,8 @@
 #   BUILD             cmake build dir (default: <repo>/build)
 #
 # Does not require a fixed sibling checkout path. Diagrams are optional —
-# paint + magnifier work without them; click-through HTML needs FIBER_DIAGRAMS_DIR.
-# Path index is optional for paint; required for path-trace UI (PR8).
+# paint + magnifier work without them; click-through HTML needs generation
+# (or a pre-populated DIAGRAMS_OUT directory).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -29,7 +31,9 @@ SPLICE_ZMIN="${SPLICE_ZMIN:-13}"
 LIMIT="${LIMIT:-0}"
 SKIP_SPLICE_DETAIL="${SKIP_SPLICE_DETAIL:-0}"
 SKIP_PATH_INDEX="${SKIP_PATH_INDEX:-0}"
+SKIP_DIAGRAMS="${SKIP_DIAGRAMS:-0}"
 PATH_INDEX_LIMIT="${PATH_INDEX_LIMIT:-0}"
+DIAGRAMS_LIMIT="${DIAGRAMS_LIMIT:-0}"
 
 if [[ -z "${FIBER_DESIGN_DB:-}" ]]; then
   echo "error: set FIBER_DESIGN_DB to a fiber design SQLite path" >&2
@@ -43,12 +47,22 @@ if [[ ! -f "${FIBER_DESIGN_DB}" ]]; then
   exit 1
 fi
 
-F2F="${BUILD}/fiber2features"
-if [[ ! -x "${F2F}" ]]; then
-  echo "Building fiber2features..."
-  cmake -B "${BUILD}" -S "${ROOT}"
-  cmake --build "${BUILD}" --target fiber2features
-fi
+ensure_tool() {
+  local name="$1"
+  local bin="${BUILD}/${name}"
+  if [[ ! -x "${bin}" ]]; then
+    echo "Building ${name}..."
+    cmake -B "${BUILD}" -S "${ROOT}"
+    cmake --build "${BUILD}" --target "${name}"
+  fi
+  if [[ ! -x "${bin}" ]]; then
+    echo "error: missing ${bin}" >&2
+    exit 1
+  fi
+  echo "${bin}"
+}
+
+F2F="$(ensure_tool fiber2features)"
 
 echo "fiber package: ${FIBER_DESIGN_DB} → ${OUT}"
 mkdir -p "${OUT}"
@@ -96,27 +110,42 @@ if [[ "${SKIP_PATH_INDEX}" != "1" ]]; then
   fi
 fi
 
-# Optional HTML diagrams (page-relative URL for the demo host)
+# HTML diagrams: generate a real directory under the demo host root.
 DEMO_ROOT="$(cd "$(dirname "${OUT}")" && pwd)"
-DIAGRAMS_LINK="${DEMO_ROOT}/splice_diagrams"
+DIAGRAMS_OUT="${DIAGRAMS_OUT:-${DEMO_ROOT}/splice_diagrams}"
 HAS_DIAGRAMS=0
-if [[ -n "${FIBER_DIAGRAMS_DIR:-}" ]]; then
-  if [[ ! -d "${FIBER_DIAGRAMS_DIR}" ]]; then
-    echo "error: FIBER_DIAGRAMS_DIR is not a directory: ${FIBER_DIAGRAMS_DIR}" >&2
-    exit 1
+
+if [[ "${SKIP_DIAGRAMS}" == "1" ]]; then
+  if [[ -d "${DIAGRAMS_OUT}" ]] && [[ ! -L "${DIAGRAMS_OUT}" ]] && \
+     compgen -G "${DIAGRAMS_OUT}/*.html" > /dev/null; then
+    HAS_DIAGRAMS=1
+    echo "diagrams: skipped generation; using existing ${DIAGRAMS_OUT}"
+  else
+    echo "diagrams: skipped (SKIP_DIAGRAMS=1); click-through disabled"
   fi
-  ln -sfn "$(cd "${FIBER_DIAGRAMS_DIR}" && pwd)" "${DIAGRAMS_LINK}"
-  HAS_DIAGRAMS=1
-  echo "diagrams: ${DIAGRAMS_LINK} → ${FIBER_DIAGRAMS_DIR}"
-elif [[ -d "${DIAGRAMS_LINK}" ]] || [[ -L "${DIAGRAMS_LINK}" ]]; then
-  HAS_DIAGRAMS=1
-  echo "diagrams: using existing ${DIAGRAMS_LINK}"
 else
-  echo "diagrams: none (paint + magnifier still work; click-through disabled)"
+  SD="$(ensure_tool splice_diagram)"
+  # Replace symlink with a real directory before writing.
+  if [[ -L "${DIAGRAMS_OUT}" ]]; then
+    echo "diagrams: removing symlink ${DIAGRAMS_OUT}"
+    rm -f "${DIAGRAMS_OUT}"
+  fi
+  mkdir -p "${DIAGRAMS_OUT}"
+  SD_ARGS=(--all -o "${DIAGRAMS_OUT}" "${FIBER_DESIGN_DB}")
+  if [[ "${DIAGRAMS_LIMIT}" != "0" ]]; then
+    SD_ARGS+=(--limit "${DIAGRAMS_LIMIT}")
+  fi
+  echo "splice_diagram → ${DIAGRAMS_OUT}"
+  if "${SD}" "${SD_ARGS[@]}"; then
+    HAS_DIAGRAMS=1
+  else
+    echo "warn: splice_diagram failed; click-through disabled" >&2
+  fi
 fi
 
 # Patch package manifest: relative URLs only, optional diagrams_url
 export OUT HAS_DIAGRAMS
+# diagrams_url is page-relative to DEMO_ROOT when diagrams live next to fiber_data
 python3 - <<'PY'
 import json
 import os
