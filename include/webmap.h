@@ -25,7 +25,7 @@ extern "C" {
 
 typedef struct {
     size_t event_queue_size;   /* 0 = default 64 */
-    size_t max_tiles;          /* 0 = default 256; in-memory tile cache */
+    size_t max_tiles;          /* 0 = default 256; LRU cache (P4.2 eviction) */
     size_t max_overlays;       /* 0 = default 4096; dynamic features */
     size_t max_layers_per_tile;/* 0 = default 32 */
 } webmap_config_t;
@@ -200,6 +200,13 @@ uint32_t webmap_tile_count_at_zoom(uint8_t z);
  */
 int webmap_load_wmap_tile(webmap_ctx_t *ctx, const uint8_t *data, size_t len);
 
+/**
+ * Drop one cached tile by id (P4.13 host decode-and-drop).
+ * Frees geometry retained in the library tile cache after the host has
+ * copied or uploaded layers. Returns 0 if dropped, 1 if not present, -1 on error.
+ */
+int webmap_drop_tile(webmap_ctx_t *ctx, webmap_tile_id_t id);
+
 /** Number of tiles currently held. */
 size_t webmap_tile_count(const webmap_ctx_t *ctx);
 
@@ -268,6 +275,12 @@ const char *webmap_feature_class_name(webmap_feature_class_t c);
 /* ── Status → color defaults ───────────────────────────────────────── */
 
 uint32_t webmap_status_rgba(webmap_status_t s);
+
+/* ── Schematic layout (P4.10 / ADR-020) ───────────────────────────────
+ * See webmap_schematic.h — pure geometry from splice_detail JSON.
+ * Included here for discoverability; full API is in that header.
+ */
+#include "webmap_schematic.h"
 
 #ifdef __cplusplus
 }

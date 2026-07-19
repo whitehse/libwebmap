@@ -22,6 +22,8 @@ webmap_link_or_skip("basemap")
 webmap_link_or_skip("fiber_data")
 webmap_link_or_skip("splice_diagrams")
 webmap_link_or_skip("tiles_fiber")
+webmap_link_or_skip("weather")
+webmap_link_or_skip("dynamic")
 
 # Optional WASM module if present next to sources or already built
 foreach(_wasm "webmap.wasm")

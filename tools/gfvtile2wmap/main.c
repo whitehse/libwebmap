@@ -212,6 +212,25 @@ static int ends_with(const char *s, const char *suf)
     return strcmp(s + n - m, suf) == 0;
 }
 
+/** Join a/b into dst (NUL-terminated). Returns 0 on success, -1 if too long. */
+static int path_join2(char *dst, size_t dst_sz, const char *a, const char *b)
+{
+    size_t na, nb;
+    if (!dst || dst_sz == 0 || !a || !b) {
+        return -1;
+    }
+    na = strlen(a);
+    nb = strlen(b);
+    if (na + 1 + nb + 1 > dst_sz) {
+        return -1;
+    }
+    memcpy(dst, a, na);
+    dst[na] = '/';
+    memcpy(dst + na + 1, b, nb);
+    dst[na + 1 + nb] = '\0';
+    return 0;
+}
+
 typedef struct {
     double west, south, east, north;
     int enabled;
@@ -238,7 +257,8 @@ static int convert_dir(const char *in_root, const char *out_root, int zmin,
     DIR *zd;
     struct dirent *ze;
     int ok = 0, fail = 0, skip = 0;
-    char zpath[1024], xpath[1024], ypath[1024], outpath[1200], outdir[1100];
+    char zpath[4096], xpath[4096], ypath[4096], outdir[4096], outpath[4096];
+    char xcomp[32], ycomp[32];
 
     zd = opendir(in_root);
     if (!zd) {
@@ -259,7 +279,9 @@ static int convert_dir(const char *in_root, const char *out_root, int zmin,
         if (z < zmin || z > zmax || z > 255) {
             continue;
         }
-        snprintf(zpath, sizeof(zpath), "%s/%s", in_root, ze->d_name);
+        if (path_join2(zpath, sizeof(zpath), in_root, ze->d_name) != 0) {
+            continue;
+        }
         xd = opendir(zpath);
         if (!xd) {
             continue;
@@ -272,7 +294,9 @@ static int convert_dir(const char *in_root, const char *out_root, int zmin,
                 continue;
             }
             x = atoi(xe->d_name);
-            snprintf(xpath, sizeof(xpath), "%s/%s", zpath, xe->d_name);
+            if (path_join2(xpath, sizeof(xpath), zpath, xe->d_name) != 0) {
+                continue;
+            }
             yd = opendir(xpath);
             if (!yd) {
                 continue;
@@ -281,6 +305,7 @@ static int convert_dir(const char *in_root, const char *out_root, int zmin,
                 webmap_tile_id_t id;
                 int y;
                 char yname[64];
+                int n_out;
                 if (ye->d_name[0] == '.') {
                     continue;
                 }
@@ -306,15 +331,35 @@ static int convert_dir(const char *in_root, const char *out_root, int zmin,
                     skip++;
                     continue;
                 }
-                snprintf(ypath, sizeof(ypath), "%s/%s", xpath, ye->d_name);
-                snprintf(outdir, sizeof(outdir), "%s/%u/%u", out_root, id.z,
-                         id.x);
+                if (path_join2(ypath, sizeof(ypath), xpath, ye->d_name) != 0) {
+                    fail++;
+                    continue;
+                }
+                n_out = snprintf(xcomp, sizeof(xcomp), "%u", id.x);
+                if (n_out < 0 || (size_t)n_out >= sizeof(xcomp)) {
+                    fail++;
+                    continue;
+                }
+                if (path_join2(outdir, sizeof(outdir), out_root, ze->d_name) !=
+                        0 ||
+                    path_join2(outdir, sizeof(outdir), outdir, xcomp) != 0) {
+                    fail++;
+                    continue;
+                }
                 if (mkdirs_p(outdir) != 0) {
                     fprintf(stderr, "mkdir %s failed\n", outdir);
                     fail++;
                     continue;
                 }
-                snprintf(outpath, sizeof(outpath), "%s/%u.wmap", outdir, id.y);
+                n_out = snprintf(ycomp, sizeof(ycomp), "%u.wmap", id.y);
+                if (n_out < 0 || (size_t)n_out >= sizeof(ycomp)) {
+                    fail++;
+                    continue;
+                }
+                if (path_join2(outpath, sizeof(outpath), outdir, ycomp) != 0) {
+                    fail++;
+                    continue;
+                }
                 if (convert_one(ypath, outpath, id, quiet) == 0) {
                     ok++;
                 } else {

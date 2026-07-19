@@ -1,100 +1,166 @@
 /**
  * @file webmap_wasm_rt.c
- * @brief Freestanding WASM runtime: heap + libc/math shims (no Emscripten).
+ * @brief Freestanding WASM runtime: free-list heap + libc/math shims (no Emscripten).
  *
- * Memory model: linear memory grows via __builtin_wasm_memory_grow.
- * Host may still import nothing for malloc — this file is self-contained.
+ * P4.3: free-list malloc/free with coalescing (wasm/webmap_heap.c); watermark
+ * stats for host reload safety. Bump allocator retired.
  *
  * Build: clang --target=wasm32 -nostdlib -ffreestanding …
- * Documented in docs/decisions/010 and docs/guides/wasm.md
+ * Documented in docs/decisions/010, docs/guides/wasm.md
  */
+
+#include "webmap_heap.h"
 
 #include <stddef.h>
 #include <stdint.h>
 
-/* ── Memory ────────────────────────────────────────────────────────── */
+/* ── WASM linear-memory backend ────────────────────────────────────── */
 
-/* Bump heap starts at 1 page (64 KiB) so low memory stays free for data. */
-static uintptr_t heap_ptr = 65536u;
-static int heap_inited;
+/*
+ * Heap must start *above* the linker stack region.
+ * wasm-ld places __stack_pointer just above static data (~64–80 KiB with a
+ * small default stack). Growing the freelist heap from 64 KiB collides with
+ * the stack and hangs create/calloc. Reserve low 1 MiB for stack + data.
+ */
+#define WM_WASM_HEAP_BASE (1024u * 1024u)
 
-static void heap_init(void)
+static size_t wasm_capacity(void)
 {
-    if (!heap_inited) {
-        heap_ptr = (heap_ptr + 15u) & ~(uintptr_t)15u;
-        heap_inited = 1;
+    size_t total = (size_t)__builtin_wasm_memory_size(0) * 65536u;
+    if (total <= WM_WASM_HEAP_BASE) {
+        return 0;
+    }
+    return total - WM_WASM_HEAP_BASE;
+}
+
+static int wasm_grow_to(size_t need_from_base)
+{
+    size_t end = WM_WASM_HEAP_BASE + need_from_base;
+    size_t pages = (size_t)__builtin_wasm_memory_size(0);
+    size_t need_pages;
+    if (end < WM_WASM_HEAP_BASE) {
+        return -1;
+    }
+    need_pages = (end + 65535u) / 65536u;
+    if (need_pages > pages) {
+        if (__builtin_wasm_memory_grow(0, need_pages - pages) == (size_t)-1) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int heap_ready;
+
+static void ensure_heap(void)
+{
+    webmap_heap_backend_t be;
+    if (heap_ready) {
+        return;
+    }
+    be.base = WM_WASM_HEAP_BASE;
+    be.initial = 0;
+    be.grow_to = wasm_grow_to;
+    be.capacity = wasm_capacity;
+    if (webmap_heap_init(&be) == 0) {
+        heap_ready = 1;
     }
 }
 
 void *malloc(size_t n)
 {
-    uintptr_t p, end, pages, need;
-    heap_init();
-    if (n == 0) {
-        n = 1;
-    }
-    n = (n + 15u) & ~(size_t)15u;
-    p = heap_ptr;
-    end = p + n;
-    /* grow memory if needed (page = 64 KiB) */
-    pages = __builtin_wasm_memory_size(0);
-    need = (end + 65535u) / 65536u;
-    if (need > pages) {
-        if (__builtin_wasm_memory_grow(0, need - pages) == (size_t)-1) {
-            return NULL;
-        }
-    }
-    heap_ptr = end;
-    return (void *)p;
+    ensure_heap();
+    return webmap_heap_malloc(n);
 }
 
 void free(void *p)
 {
-    (void)p; /* bump allocator: no free */
+    if (!heap_ready) {
+        return;
+    }
+    webmap_heap_free(p);
 }
 
 void *calloc(size_t nmemb, size_t size)
 {
-    size_t n;
-    void *p;
-    unsigned char *b;
-    size_t i;
-    if (size != 0 && nmemb > (size_t)-1 / size) {
-        return NULL;
-    }
-    n = nmemb * size;
-    p = malloc(n);
-    if (!p) {
-        return NULL;
-    }
-    b = (unsigned char *)p;
-    for (i = 0; i < n; i++) {
-        b[i] = 0;
-    }
-    return p;
+    ensure_heap();
+    return webmap_heap_calloc(nmemb, size);
 }
 
 void *realloc(void *ptr, size_t size)
 {
-    void *n;
-    /* bump allocator cannot shrink old block; copy */
-    if (!ptr) {
-        return malloc(size);
-    }
-    n = malloc(size);
-    if (!n) {
-        return NULL;
-    }
-    /* best-effort copy of size bytes (may over-read old; acceptable for wasm) */
-    {
-        unsigned char *d = (unsigned char *)n;
-        const unsigned char *s = (const unsigned char *)ptr;
-        size_t i;
-        for (i = 0; i < size; i++) {
-            d[i] = s[i];
-        }
-    }
-    return n;
+    ensure_heap();
+    return webmap_heap_realloc(ptr, size);
+}
+
+/* Explicit exports for host staging / reload policy (ADR-024 / P4.3). */
+__attribute__((export_name("webmap_wasm_alloc")))
+void *webmap_wasm_alloc(size_t n)
+{
+    return malloc(n);
+}
+
+__attribute__((export_name("webmap_wasm_free")))
+void webmap_wasm_free(void *p)
+{
+    free(p);
+}
+
+__attribute__((export_name("webmap_wasm_reset_arena")))
+void webmap_wasm_reset_arena(void)
+{
+    ensure_heap();
+    webmap_heap_reset_arena();
+}
+
+__attribute__((export_name("webmap_wasm_heap_used")))
+size_t webmap_wasm_heap_used(void)
+{
+    webmap_heap_stats_t s;
+    ensure_heap();
+    webmap_heap_get_stats(&s);
+    return s.used_bytes;
+}
+
+__attribute__((export_name("webmap_wasm_heap_free_bytes")))
+size_t webmap_wasm_heap_free_bytes(void)
+{
+    webmap_heap_stats_t s;
+    ensure_heap();
+    webmap_heap_get_stats(&s);
+    return s.free_bytes;
+}
+
+__attribute__((export_name("webmap_wasm_heap_capacity")))
+size_t webmap_wasm_heap_capacity(void)
+{
+    webmap_heap_stats_t s;
+    ensure_heap();
+    webmap_heap_get_stats(&s);
+    return s.capacity_bytes;
+}
+
+__attribute__((export_name("webmap_wasm_heap_over_watermark")))
+int webmap_wasm_heap_over_watermark(void)
+{
+    ensure_heap();
+    return webmap_heap_over_watermark();
+}
+
+__attribute__((export_name("webmap_wasm_heap_set_watermark")))
+void webmap_wasm_heap_set_watermark(size_t bytes)
+{
+    ensure_heap();
+    webmap_heap_set_watermark(bytes);
+}
+
+__attribute__((export_name("webmap_wasm_heap_high_water")))
+size_t webmap_wasm_heap_high_water(void)
+{
+    webmap_heap_stats_t s;
+    ensure_heap();
+    webmap_heap_get_stats(&s);
+    return s.high_water;
 }
 
 void *memcpy(void *dst, const void *src, size_t n)
@@ -201,11 +267,8 @@ double floor(double x)
     return i - 1.0;
 }
 
-/* Cody-Waite style approximations adequate for map projection. */
-
 double exp(double x)
 {
-    /* series for |x| moderate */
     int k;
     double y, s, t;
     if (x > 88.0) {
@@ -214,7 +277,6 @@ double exp(double x)
     if (x < -88.0) {
         return 0.0;
     }
-    /* reduce: exp(x) = 2^n * exp(r) */
     {
         double n = floor(x / 0.6931471805599453 + 0.5);
         double r = x - n * 0.6931471805599453;
@@ -254,7 +316,6 @@ double log(double x)
         x *= 2.0;
         n--;
     }
-    /* log(1+z) series, z = x-1 */
     z = x - 1.0;
     s = 0.0;
     y = z;
@@ -267,7 +328,6 @@ double log(double x)
 
 double sin(double x)
 {
-    /* range reduce to [-pi,pi] roughly */
     const double twopi = 6.283185307179586;
     double s, t;
     int k;
@@ -302,7 +362,6 @@ double tan(double x)
 
 double atan(double x)
 {
-    /* atan via series for |x|<=1, identity otherwise */
     int inv = 0;
     double s, t, x2;
     int k;

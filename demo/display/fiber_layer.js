@@ -22,6 +22,15 @@ import {
 } from "./fiber_style.js";
 import { parseFmap } from "./fiber_fmap.js";
 import { createFiberMagnifier } from "./fiber_magnifier.js";
+import {
+  estimateFiberGeomBytes,
+  estimateDetailCacheBytes,
+} from "./mem_stats.js";
+import {
+  createTileCache,
+  destroyGpuLayers,
+  parseMaxTilesQuery,
+} from "./tile_cache.js";
 
 const LINE_MITER_LIMIT = 2.5;
 const R = 6378137;
@@ -151,11 +160,24 @@ function lonLatToMerc(lon, lat) {
  * }} opts
  */
 export function createFiberLayer(opts) {
-  const { device, labelCanvas, log = () => {} } = opts;
+  const {
+    device,
+    labelCanvas,
+    log = () => {},
+    onTrace = null,
+    onOpenDiagram = null,
+    requestPaint = null,
+    memStats = null,
+    maxTiles = null,
+    layoutService = null,
+  } = opts;
   const labelCtx = labelCanvas ? labelCanvas.getContext("2d") : null;
 
-  /** @type {Map<string, object[]>} */
-  const tileGpu = new Map();
+  const hostMaxTiles =
+    maxTiles != null && Number.isFinite(maxTiles)
+      ? Math.floor(maxTiles)
+      : parseMaxTilesQuery();
+
   /** @type {Map<string, Array<{mx:number,my:number,ports:number,strand:number,tube:number,sp_guid:string}>>} */
   const tileTaps = new Map();
   /** @type {Map<string, Array<{mx:number,my:number,rgba:number,sp_guid:string}>>} */
@@ -165,6 +187,34 @@ export function createFiberLayer(opts) {
    * @type {Map<string, Array<{kind:string,size:number,rgba:number,merc:Float32Array,n:number,id:string}>>}
    */
   const tileLines = new Map();
+
+  function dropTileSideData(key) {
+    tileTaps.delete(key);
+    tileSplices.delete(key);
+    tileLines.delete(key);
+  }
+
+  const fiberCache = createTileCache({
+    maxTiles: hostMaxTiles,
+    name: "fiber",
+    onEvict: (key, layers) => {
+      const b = destroyGpuLayers(/** @type {object[]} */ (layers));
+      if (b && memStats) memStats.subGpu("fiber_gpu", b);
+      dropTileSideData(key);
+    },
+    /* Reload must free old GPU only — side Maps already rewritten by tileToGpu. */
+    onReplace: (_key, layers) => {
+      const b = destroyGpuLayers(/** @type {object[]} */ (layers));
+      if (b && memStats) memStats.subGpu("fiber_gpu", b);
+    },
+  });
+
+  /** Package tile keys available on disk. */
+  const fiberAvailable = new Set();
+  /** @type {Map<string, Promise<void>>} */
+  const fiberInflight = new Map();
+  let fiberBaseUrl = "./fiber_data";
+  let fiberEnsureGen = 0;
 
   /** Last painted hit targets in device pixels (canvas space). */
   /** @type {Array<{px:number,py:number,r:number,kind:string,sp_guid:string,ports?:number,strand?:number,tube?:number,mx:number,my:number}>} */
@@ -187,11 +237,138 @@ export function createFiberLayer(opts) {
   let lastPickView = null;
   let lastPickMppFn = null;
 
-  const magnifier = createFiberMagnifier({ log });
+  /**
+   * Estimate cable approach bearings from loaded fmap geometry near a SP.
+   * approach_deg: 0=N, 90=E (mercator: +x east, +y north).
+   * @returns {Map<string, number>} cable_guid → degrees
+   */
+  function approachesNear(mx, my, maxDistM = 120) {
+    /** @type {Map<string, {deg:number, d2:number}>} */
+    const best = new Map();
+    if (mx == null || my == null) return new Map();
+    const maxD2 = maxDistM * maxDistM;
+    const sampleM = 45;
+
+    for (const lines of tileLines.values()) {
+      for (const ln of lines) {
+        const guid = ln.cable_guid;
+        if (!guid || !ln.merc || ln.n < 2) continue;
+        const merc = ln.merc;
+        let nearestI = 0;
+        let nearestD2 = Infinity;
+        for (let i = 0; i < ln.n; i++) {
+          const dx = merc[i * 2] - mx;
+          const dy = merc[i * 2 + 1] - my;
+          const d2 = dx * dx + dy * dy;
+          if (d2 < nearestD2) {
+            nearestD2 = d2;
+            nearestI = i;
+          }
+        }
+        if (nearestD2 > maxD2) continue;
+
+        // Walk along polyline to sample point away from SP
+        function walk(dir) {
+          let acc = 0;
+          let i = nearestI;
+          let px = merc[i * 2];
+          let py = merc[i * 2 + 1];
+          while (i + dir >= 0 && i + dir < ln.n) {
+            i += dir;
+            const x = merc[i * 2];
+            const y = merc[i * 2 + 1];
+            const step = Math.hypot(x - px, y - py);
+            if (step < 1e-6) continue;
+            acc += step;
+            px = x;
+            py = y;
+            if (acc >= sampleM) return [x, y];
+          }
+          return acc > 1e-3 ? [px, py] : null;
+        }
+        const a = walk(1);
+        const b = walk(-1);
+        let sample = a;
+        if (a && b) {
+          const da = (a[0] - mx) ** 2 + (a[1] - my) ** 2;
+          const db = (b[0] - mx) ** 2 + (b[1] - my) ** 2;
+          sample = da >= db ? a : b;
+        } else {
+          sample = a || b;
+        }
+        if (!sample) continue;
+        const dx = sample[0] - mx;
+        const dy = sample[1] - my;
+        if (Math.abs(dx) < 1e-9 && Math.abs(dy) < 1e-9) continue;
+        // mercator: +x east, +y north → 0°N 90°E
+        let deg = (Math.atan2(dx, dy) * 180) / Math.PI;
+        if (deg < 0) deg += 360;
+        const prev = best.get(guid);
+        if (!prev || nearestD2 < prev.d2) {
+          best.set(guid, { deg, d2: nearestD2 });
+        }
+      }
+    }
+    const out = new Map();
+    for (const [g, v] of best) out.set(g, Math.round(v.deg * 10) / 10);
+    return out;
+  }
+
+  function enrichDetail(hit, detail) {
+    if (!detail || !detail.cables) return detail;
+    const need = detail.cables.some((c) => c.approach_deg == null);
+    if (!need && detail.cables.every((c) => c.approach != null)) return detail;
+    const map = approachesNear(hit.mx, hit.my);
+    if (!map.size) return detail;
+    const labels = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+    const cables = detail.cables.map((c) => {
+      if (c.approach_deg != null) return c;
+      const g = String(c.guid || "").toLowerCase();
+      // map may be keyed as stored in fmap
+      let deg = map.get(c.guid) ?? map.get(g);
+      if (deg == null) {
+        for (const [k, v] of map) {
+          if (String(k).toLowerCase() === g) {
+            deg = v;
+            break;
+          }
+        }
+      }
+      if (deg == null) return c;
+      const i = Math.round((((deg % 360) + 360) % 360) / 45) % 8;
+      return {
+        ...c,
+        approach_deg: deg,
+        approach: labels[i],
+      };
+    });
+    return { ...detail, cables };
+  }
+
+  const magnifier = createFiberMagnifier({
+    log,
+    enrichDetail,
+    onTrace: (guid, fiber) => {
+      if (typeof onTrace === "function") onTrace(guid, fiber);
+    },
+    onOpenDiagram: (spGuid) => {
+      if (typeof onOpenDiagram === "function") onOpenDiagram(spGuid);
+      else {
+        const url = diagramUrl(spGuid, diagramIndex, diagramsBase);
+        if (url) window.open(url, "_blank", "noopener,noreferrer");
+      }
+    },
+    requestPaint: () => {
+      if (typeof requestPaint === "function") requestPaint();
+    },
+    memStats,
+    layoutService,
+  });
 
   function createMesh(vertBuf, indices, indexCount, meta) {
+    const vbSize = Math.max(vertBuf.byteLength, 24);
     const vb = device.createBuffer({
-      size: Math.max(vertBuf.byteLength, 24),
+      size: vbSize,
       usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
       mappedAtCreation: true,
     });
@@ -204,14 +381,113 @@ export function createFiberLayer(opts) {
             indices.byteOffset + indices.byteLength
           )
         : indices;
+    const ibSize = Math.max(indexCount * 4, 4);
     const ib = device.createBuffer({
-      size: Math.max(indexCount * 4, 4),
+      size: ibSize,
       usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
       mappedAtCreation: true,
     });
     new Uint8Array(ib.getMappedRange()).set(new Uint8Array(indBytes));
     ib.unmap();
-    return { vb, ib, indexCount, ...meta };
+    const gpuBytes = vbSize + ibSize;
+    if (memStats) memStats.addGpu("fiber_gpu", gpuBytes);
+    return { vb, ib, indexCount, _gpuBytes: gpuBytes, ...meta };
+  }
+
+  function refreshMemStats() {
+    if (!memStats) return;
+    memStats.setCount("fiber_tiles", fiberCache.size);
+    memStats.setRetained(
+      "fiber_geom_js",
+      estimateFiberGeomBytes(tileLines, tileTaps, tileSplices)
+    );
+    const detail = magnifier.getDetailCache?.();
+    if (detail) {
+      memStats.setRetained(
+        "splice_detail_js",
+        estimateDetailCacheBytes(detail)
+      );
+      memStats.setCount("splice_detail_entries", detail.size);
+    }
+  }
+
+  function getMemReport() {
+    return {
+      fiber_tiles: fiberCache.size,
+      max_tiles: fiberCache.maxTiles,
+      evictions: fiberCache.evictions,
+      fiber_geom_js: estimateFiberGeomBytes(tileLines, tileTaps, tileSplices),
+      splice_detail: magnifier.getMemReport?.() ?? null,
+      line_tile_keys: tileLines.size,
+      tap_tile_keys: tileTaps.size,
+      splice_tile_keys: tileSplices.size,
+      package_tiles: fiberAvailable.size,
+    };
+  }
+
+  /**
+   * @param {string} key
+   */
+  async function loadFiberTile(key) {
+    if (fiberInflight.has(key) || fiberCache.has(key)) return;
+    if (!fiberAvailable.has(key)) return;
+    const parts = key.split("/");
+    const z = Number(parts[0]);
+    const x = Number(parts[1]);
+    const y = Number(parts[2]);
+    const url = `${fiberBaseUrl}/${z}/${x}/${y}.fmap`;
+    const p = (async () => {
+      try {
+        const r = await fetch(url);
+        if (!r.ok) return;
+        const buf = await r.arrayBuffer();
+        const feat = parseFmap(buf);
+        const k = `${feat.z}/${feat.x}/${feat.y}`;
+        const layers = tileToGpu(feat);
+        if (layers.length || tileTaps.has(k) || tileSplices.has(k)) {
+          fiberCache.set(k, layers.length ? layers : []);
+        }
+      } catch (e) {
+        log("fiber tile fail " + url + ": " + e.message);
+      } finally {
+        fiberInflight.delete(key);
+      }
+    })();
+    fiberInflight.set(key, p);
+    await p;
+  }
+
+  /**
+   * Lazy-load fiber tiles for viewport (P4.2).
+   * @returns {Promise<void>}
+   */
+  function ensureVisibleTiles(cam, view, metersPerPixelFn) {
+    if (!show || !fiberAvailable.size) return Promise.resolve();
+    const fz = selectFiberTileZoom(cam.zoom);
+    if (fz == null) return Promise.resolve();
+    const fr = visibleTileRange(fz, cam, view, 0.35, metersPerPixelFn);
+    const gen = ++fiberEnsureGen;
+    const jobs = [];
+    for (let x = fr.minX; x <= fr.maxX; x++) {
+      for (let y = fr.minY; y <= fr.maxY; y++) {
+        const key = `${fz}/${x}/${y}`;
+        if (!fiberAvailable.has(key)) continue;
+        if (fiberCache.has(key)) {
+          fiberCache.touch(key);
+          continue;
+        }
+        if (fiberInflight.has(key)) {
+          jobs.push(fiberInflight.get(key));
+          continue;
+        }
+        jobs.push(loadFiberTile(key));
+      }
+    }
+    if (!jobs.length) return Promise.resolve();
+    return Promise.all(jobs).then(() => {
+      if (gen !== fiberEnsureGen) return;
+      refreshMemStats();
+    });
   }
 
   function linesToMesh(tile, lines, kind) {
@@ -356,16 +632,18 @@ export function createFiberLayer(opts) {
     return layers;
   }
 
-  async function loadPyramid(man, baseUrl) {
+  async function loadPyramid(man, baseUrlIn) {
     manifest = man;
+    fiberBaseUrl = (baseUrlIn || "./fiber_data").replace(/\/?$/, "");
     fiberZmin = man.zmin ?? 10;
     fiberZmax = man.zmax ?? 14;
     fiberTapZmin = man.tap_zmin ?? FIBER_TAP_ZMIN_DEFAULT;
     fiberSpliceZmin = man.splice_zmin ?? FIBER_SPLICE_ZMIN_DEFAULT;
     diagramsBase = man.diagrams_url || "./splice_diagrams/";
-    // baseUrl is e.g. "./fiber_data" — compact connectivity JSON lives under splice_detail/
-    magnifier.setDetailBase(resolveSpliceDetailBase(man, baseUrl));
-    tileGpu.clear();
+    magnifier.setDetailBase(resolveSpliceDetailBase(man, fiberBaseUrl));
+    fiberCache.clear();
+    fiberAvailable.clear();
+    fiberInflight.clear();
     tileTaps.clear();
     tileSplices.clear();
     tileLines.clear();
@@ -376,7 +654,7 @@ export function createFiberLayer(opts) {
     diagramIndex = null;
     const idxName = man.diagram_index || "diagram_index.json";
     try {
-      const ir = await fetch(`${baseUrl}/${idxName}`);
+      const ir = await fetch(`${fiberBaseUrl}/${idxName}`);
       if (ir.ok) {
         diagramIndex = await ir.json();
         log(
@@ -388,38 +666,23 @@ export function createFiberLayer(opts) {
     }
 
     const byZoom = new Map();
-    let loaded = 0;
-    const queue = [...(man.tiles || [])];
-    const workers = 8;
-
-    async function worker() {
-      while (queue.length) {
-        const t = queue.shift();
-        if (!t) break;
-        const url = `${baseUrl}/${t.z}/${t.x}/${t.y}.fmap`;
-        try {
-          const r = await fetch(url);
-          if (!r.ok) continue;
-          const buf = await r.arrayBuffer();
-          const feat = parseFmap(buf);
-          const key = `${feat.z}/${feat.x}/${feat.y}`;
-          const layers = tileToGpu(feat);
-          if (layers.length || tileTaps.has(key) || tileSplices.has(key)) {
-            if (layers.length) tileGpu.set(key, layers);
-            if (!byZoom.has(feat.z)) byZoom.set(feat.z, 0);
-            byZoom.set(feat.z, byZoom.get(feat.z) + 1);
-            loaded++;
-          }
-        } catch (e) {
-          log("fiber tile fail " + url + ": " + e.message);
-        }
-      }
+    for (const t of man.tiles || []) {
+      const key = `${t.z}/${t.x}/${t.y}`;
+      fiberAvailable.add(key);
+      if (!byZoom.has(t.z)) byZoom.set(t.z, 0);
+      byZoom.set(t.z, byZoom.get(t.z) + 1);
     }
-    await Promise.all(Array.from({ length: workers }, () => worker()));
     availableZooms = [...byZoom.keys()].sort((a, b) => a - b);
+    refreshMemStats();
+    const total = fiberAvailable.size;
+    log(
+      `fiber package ${total} tiles (z ${availableZooms.join(",") || "—"}) · ` +
+        (hostMaxTiles > 0 ? `max_tiles=${hostMaxTiles}` : "max_tiles=∞") +
+        " (P4.2 lazy — viewport load)"
+    );
     return {
-      loaded,
-      total: man.tiles?.length ?? 0,
+      loaded: 0,
+      total,
       byZoom,
       availableZooms,
       fiberZmin,
@@ -468,13 +731,13 @@ export function createFiberLayer(opts) {
   }
 
   function collectLineDraws(draws, cam, view, metersPerPixelFn) {
-    if (!show || !tileGpu.size) return;
+    if (!show || !fiberCache.size) return;
     const fz = selectFiberTileZoom(cam.zoom);
     if (fz == null) return;
     const fr = visibleTileRange(fz, cam, view, 0.25, metersPerPixelFn);
     for (let x = fr.minX; x <= fr.maxX; x++) {
       for (let y = fr.minY; y <= fr.maxY; y++) {
-        const layers = tileGpu.get(`${fz}/${x}/${y}`);
+        const layers = fiberCache.get(`${fz}/${x}/${y}`);
         if (!layers) continue;
         for (const g of layers) {
           const minZ = g.minZoom ?? fiberMinZoom(g.fiberKind);
@@ -510,7 +773,13 @@ export function createFiberLayer(opts) {
    * Paint tap circles + splice hexagons on the label canvas (screen-space).
    * Rebuilds hitTargets for click/hover handling; paints magnifier last.
    */
-  function paintSymbols(cam, view, metersPerPixelFn) {
+  /**
+   * @param {object} cam
+   * @param {object} view
+   * @param {Function} metersPerPixelFn
+   * @param {{ magnifierChrome?: "canvas"|"gpu"|"none" }} [paintOpts]
+   */
+  function paintSymbols(cam, view, metersPerPixelFn, paintOpts = {}) {
     hitTargets = [];
     lastPickCam = cam;
     lastPickView = view;
@@ -518,8 +787,9 @@ export function createFiberLayer(opts) {
     if (!labelCtx || !labelCanvas) return;
     const w = labelCanvas.width;
     const h = labelCanvas.height;
+    const magChrome = paintOpts.magnifierChrome || "canvas";
     if (!show) {
-      magnifier.paint(labelCtx, view);
+      magnifier.paint(labelCtx, view, { chrome: magChrome });
       return;
     }
 
@@ -528,7 +798,7 @@ export function createFiberLayer(opts) {
 
     const fz = selectFiberTileZoom(cam.zoom);
     if (fz == null) {
-      magnifier.paint(labelCtx, view);
+      magnifier.paint(labelCtx, view, { chrome: magChrome });
       return;
     }
     const mpp = metersPerPixelFn(cam.zoom);
@@ -655,8 +925,8 @@ export function createFiberLayer(opts) {
 
     labelCtx.restore();
 
-    // Magnifier lens on top of symbols
-    magnifier.paint(labelCtx, view);
+    // Magnifier lens on top of symbols (chrome may be WebGPU — P4.12)
+    magnifier.paint(labelCtx, view, { chrome: magChrome });
   }
 
   /** Distance from point to segment (device px space). */
@@ -806,7 +1076,14 @@ export function createFiberLayer(opts) {
   }
 
   /** Open splice diagram for a hit; returns true if opened. */
-  function handleClick(cssX, cssY, view) {
+  function handleClick(cssX, cssY, view, ev = {}) {
+    // Magnifier interaction first (fiber trace / explore)
+    if (magnifier.isOpen && magnifier.pointInLens(cssX, cssY, view)) {
+      return magnifier.onClick(cssX, cssY, view, {
+        altKey: !!ev.altKey,
+        detail: ev.detail || 1,
+      });
+    }
     const hit = hitTest(cssX, cssY, view);
     if (!hit) return false;
     window.open(hit.url, "_blank", "noopener,noreferrer");
@@ -816,16 +1093,30 @@ export function createFiberLayer(opts) {
 
   /**
    * Hover handling. Returns true if pointer is over a pickable feature
-   * (for cursor style).
+   * or the open magnifier lens (for cursor style).
    */
   function handleHover(cssX, cssY, view, cam, metersPerPixelFn, dragging) {
     if (dragging || !show) {
       magnifier.onPointer(null, cssX, cssY, view, true);
       return false;
     }
+    // While exploring the lens, keep sticky without re-picking map features
+    if (magnifier.isOpen && magnifier.pointInLens(cssX, cssY, view)) {
+      magnifier.onPointer(null, cssX, cssY, view, false);
+      return true;
+    }
     const hit = pick(cssX, cssY, view, cam, metersPerPixelFn);
     magnifier.onPointer(hit, cssX, cssY, view, false);
-    return !!hit;
+    return !!hit || magnifier.isOpen;
+  }
+
+  /**
+   * Wheel over open magnifier → in-glass zoom (does not zoom the map).
+   * @returns {boolean} true if consumed
+   */
+  function handleWheel(cssX, cssY, view, deltaY) {
+    if (!show || !magnifier.isOpen) return false;
+    return magnifier.onWheel(cssX, cssY, view, deltaY);
   }
 
   function cancelHover() {
@@ -849,7 +1140,21 @@ export function createFiberLayer(opts) {
     pick,
     handleClick,
     handleHover,
+    handleWheel,
     cancelHover,
+    refreshMemStats,
+    getMemReport,
+    ensureVisibleTiles,
+    get magnifier() {
+      return magnifier;
+    },
+    /** @param {object} view */
+    getLensLayout(view) {
+      return magnifier.getLensLayout?.(view) ?? null;
+    },
+    setLayoutService(svc) {
+      magnifier.setLayoutService?.(svc);
+    },
     setShow(v) {
       show = !!v;
       if (!show) magnifier.cancel();
@@ -880,7 +1185,13 @@ export function createFiberLayer(opts) {
       return fiberSpliceZmin;
     },
     get size() {
-      return tileGpu.size;
+      return fiberCache.size;
+    },
+    get maxTiles() {
+      return fiberCache.maxTiles;
+    },
+    get evictions() {
+      return fiberCache.evictions;
     },
     get manifest() {
       return manifest;

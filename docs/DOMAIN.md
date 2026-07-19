@@ -86,7 +86,13 @@ host maps to dynamic overlays:
 Status strings (`ok` / `degraded` / `down` / …) map to `webmap_status_t` and
 `webmap_status_rgba`. Gridded wind may be a host-only raster texture stub —
 see [formats/weather-package.md](formats/weather-package.md) and
-`fixtures/weather/sample_alerts.json`.
+`fixtures/weather/sample_alerts.json`. Demo host paint + opacity: **P4.7**
+`demo/display/weather_layer.js` ([ADR-022](decisions/022-weather-package-host-paint.md)).
+
+Live operational updates use host **`map.dynamic`** messages (NOTIFY / WS /
+fixture JSONL), not library I/O: **P4.9** `demo/display/dynamic_feed.js`
+([ADR-023](decisions/023-dynamic-updates-host-notify.md),
+[guides/dynamic-feed.md](guides/dynamic-feed.md)).
 
 ## WebGPU presentation
 

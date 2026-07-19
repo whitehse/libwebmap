@@ -28,6 +28,7 @@ if(NOT WEBMAP_BUILD_WASM)
     add_library(webmap STATIC
         src/webmap.c
         src/webmap_mvt.c
+        src/webmap_schematic.c
     )
     target_include_directories(webmap PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -133,6 +134,11 @@ if(WEBMAP_BUILD_TESTS AND NOT WEBMAP_BUILD_WASM)
     add_test(NAME webmap_fixture_ok COMMAND webmap_fixture_ok
              WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
+    # P4.2: max_tiles LRU eviction + TILE_EVICTED
+    add_executable(webmap_tile_eviction tests/test_tile_eviction.c)
+    target_link_libraries(webmap_tile_eviction PRIVATE webmap)
+    add_test(NAME webmap_tile_eviction COMMAND webmap_tile_eviction)
+
     # .fmap v2/v3 golden fixtures (Python; no extra deps)
     add_test(NAME webmap_fmap_parse
              COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_fmap_parse.py
@@ -142,6 +148,62 @@ if(WEBMAP_BUILD_TESTS AND NOT WEBMAP_BUILD_WASM)
     add_test(NAME webmap_path_index
              COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/export_path_index.py --self-test
              WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
+    # P4.3: freestanding free-list heap (host-simulated arena)
+    add_executable(webmap_wasm_heap
+        tests/test_wasm_heap.c
+        wasm/webmap_heap.c
+    )
+    target_include_directories(webmap_wasm_heap PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/wasm
+    )
+    add_test(NAME webmap_wasm_heap COMMAND webmap_wasm_heap)
+
+    # P4.4: ABI packing portable asserts (+ host contrast print)
+    add_executable(webmap_wasm_abi_pack tests/test_wasm_abi_pack.c)
+    target_include_directories(webmap_wasm_abi_pack PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    add_test(NAME webmap_wasm_abi_pack COMMAND webmap_wasm_abi_pack)
+
+    # P4.10: schematic layout from splice_detail JSON
+    add_executable(webmap_schematic_layout tests/test_schematic_layout.c)
+    target_link_libraries(webmap_schematic_layout PRIVATE webmap)
+    add_test(NAME webmap_schematic_layout COMMAND webmap_schematic_layout
+             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
+    # P4.6: JS vs WASM parse compare (requires demo/webmap.wasm + basemap tiles)
+    # P4.7: weather package mapping smoke (no WebGPU)
+    find_program(WEBMAP_NODE node)
+    if(WEBMAP_NODE)
+        add_test(NAME webmap_compare_wasm_parse
+                 COMMAND ${WEBMAP_NODE} tools/compare_wasm_parse.mjs --limit 12
+                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+        # P4.13: default-on when decode-and-drop gate is green
+        set_tests_properties(webmap_compare_wasm_parse PROPERTIES
+            PASS_REGULAR_EXPRESSION "Default-on recommended: true")
+        add_test(NAME webmap_weather_layer
+                 COMMAND ${WEBMAP_NODE} tests/test_weather_layer.mjs
+                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+        add_test(NAME webmap_glass_tokens
+                 COMMAND ${WEBMAP_NODE} tests/test_glass_tokens.mjs
+                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+        add_test(NAME webmap_dynamic_feed
+                 COMMAND ${WEBMAP_NODE} tests/test_dynamic_feed.mjs
+                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+        add_test(NAME webmap_schematic_layout_js
+                 COMMAND ${WEBMAP_NODE} tests/test_schematic_layout_js.mjs
+                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+        add_test(NAME webmap_schematic_p411
+                 COMMAND ${WEBMAP_NODE} tests/test_schematic_p411.mjs
+                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+        add_test(NAME webmap_glass_lens_gpu
+                 COMMAND ${WEBMAP_NODE} tests/test_glass_lens_gpu.mjs
+                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+        add_test(NAME webmap_wasm_p413
+                 COMMAND ${WEBMAP_NODE} tests/test_wasm_p413.mjs
+                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+    endif()
 endif()
 
 # ── Freestanding WASM module (ADR-009, ADR-010) ──────────────────────
@@ -149,9 +211,12 @@ if(WEBMAP_BUILD_WASM)
     add_executable(webmap_wasm
         wasm/webmap_wasm_entry.c
         wasm/webmap_wasm_rt.c
+        wasm/webmap_heap.c
+        wasm/webmap_abi_layout.c
         src/webmap.c
+        src/webmap_schematic.c
     )
-    target_include_directories(webmap_wasm PRIVATE include)
+    target_include_directories(webmap_wasm PRIVATE include wasm)
     target_compile_definitions(webmap_wasm PRIVATE WEBMAP_WASM_FREESTANDING=1)
     target_compile_options(webmap_wasm PRIVATE
         -ffreestanding -fno-builtin -fno-exceptions

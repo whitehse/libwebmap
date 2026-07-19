@@ -25,13 +25,236 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sqlite3
+import struct
 import sys
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 NIL = "00000000-0000-0000-0000-000000000000"
+
+# Compass labels for approach_deg (0=N, 90=E, screen-friendly)
+_COMPASS = (
+    (0, "N"),
+    (45, "NE"),
+    (90, "E"),
+    (135, "SE"),
+    (180, "S"),
+    (225, "SW"),
+    (270, "W"),
+    (315, "NW"),
+)
+
+
+def compass_label(deg: Optional[float]) -> Optional[str]:
+    if deg is None:
+        return None
+    d = deg % 360.0
+    best = min(_COMPASS, key=lambda t: min(abs(t[0] - d), 360 - abs(t[0] - d)))
+    return best[1]
+
+
+def gpkg_to_wkb(blob: bytes) -> Optional[bytes]:
+    """Strip GeoPackageBinary header → ISO WKB (same rules as fiber2features)."""
+    if not blob or len(blob) < 8:
+        return None
+    if blob[0] in (0, 1) and len(blob) > 5:
+        return blob
+    if blob[0:2] != b"GP":
+        return None
+    flags = blob[3]
+    env = (flags >> 1) & 0x07
+    env_sizes = (0, 32, 48, 48, 64)
+    off = 8 + (env_sizes[env] if 0 <= env <= 4 else 0)
+    if off >= len(blob):
+        return None
+    return blob[off:]
+
+
+def _u32(data: bytes, off: int, le: bool) -> int:
+    return struct.unpack_from("<I" if le else ">I", data, off)[0]
+
+
+def _f64(data: bytes, off: int, le: bool) -> float:
+    return struct.unpack_from("<d" if le else ">d", data, off)[0]
+
+
+def _geom_base_and_stride(gtype: int) -> Tuple[int, int]:
+    if gtype & 0x80000000 or gtype & 0x40000000:
+        base = gtype & 0xFF
+        dims = 2 + (1 if gtype & 0x80000000 else 0) + (
+            1 if gtype & 0x40000000 else 0
+        )
+        return base, 8 * dims
+    if gtype >= 1000:
+        dim = gtype // 1000
+        base = gtype % 1000
+        stride = {0: 16, 1: 24, 2: 24, 3: 32}.get(dim, 16)
+        return base, stride
+    return gtype & 0xFF, 16
+
+
+def wkb_to_xy_parts(wkb: bytes) -> List[List[Tuple[float, float]]]:
+    """List of polylines as (x,y) in design CRS (Point / LineString / Multi)."""
+    if not wkb or len(wkb) < 9:
+        return []
+    endian = wkb[0]
+    if endian not in (0, 1):
+        return []
+    le = endian == 1
+    gtype = _u32(wkb, 1, le)
+    base, stride = _geom_base_and_stride(gtype)
+    off = 5
+    parts: List[List[Tuple[float, float]]] = []
+
+    if base == 1:  # Point
+        if off + stride <= len(wkb):
+            parts.append([(_f64(wkb, off, le), _f64(wkb, off + 8, le))])
+        return parts
+
+    if base == 2:  # LineString
+        n = _u32(wkb, off, le)
+        off += 4
+        pts: List[Tuple[float, float]] = []
+        for _ in range(n):
+            if off + stride > len(wkb):
+                break
+            pts.append((_f64(wkb, off, le), _f64(wkb, off + 8, le)))
+            off += stride
+        if pts:
+            parts.append(pts)
+        return parts
+
+    if base == 5:  # MultiLineString
+        n_parts = _u32(wkb, off, le)
+        off += 4
+        for _ in range(n_parts):
+            if off + 5 > len(wkb):
+                break
+            pe = wkb[off]
+            off += 1
+            if pe not in (0, 1):
+                break
+            ple = pe == 1
+            pt = _u32(wkb, off, ple)
+            off += 4
+            pbase, pstride = _geom_base_and_stride(pt)
+            if pbase != 2:
+                break
+            n = _u32(wkb, off, ple)
+            off += 4
+            pts = []
+            for _k in range(n):
+                if off + pstride > len(wkb):
+                    break
+                pts.append((_f64(wkb, off, ple), _f64(wkb, off + 8, ple)))
+                off += pstride
+            if pts:
+                parts.append(pts)
+        return parts
+
+    return parts
+
+
+def approach_deg_from_parts(
+    sp_xy: Tuple[float, float],
+    cable_parts: List[List[Tuple[float, float]]],
+    sample_ft: float = 80.0,
+) -> Optional[float]:
+    """
+    Bearing of cable as it leaves the splicepoint (0=N, 90=E).
+
+    Find the vertex nearest the SP, then walk ~sample_ft along the line
+    away from the SP. That vector is the geographic approach of the cable
+    plant (rail placement for the magnifier schematic).
+    """
+    if not cable_parts or sp_xy is None:
+        return None
+    sx, sy = sp_xy
+    best_d2 = float("inf")
+    best_part: Optional[List[Tuple[float, float]]] = None
+    best_i = -1
+    for part in cable_parts:
+        for i, (x, y) in enumerate(part):
+            d2 = (x - sx) * (x - sx) + (y - sy) * (y - sy)
+            if d2 < best_d2:
+                best_d2 = d2
+                best_part = part
+                best_i = i
+    if best_part is None or best_i < 0:
+        return None
+
+    # Prefer walking toward the longer remaining arm
+    def walk(direction: int) -> Optional[Tuple[float, float]]:
+        acc = 0.0
+        i = best_i
+        px, py = best_part[i]
+        while 0 <= i + direction < len(best_part):
+            i += direction
+            x, y = best_part[i]
+            step = math.hypot(x - px, y - py)
+            if step < 1e-9:
+                continue
+            acc += step
+            px, py = x, y
+            if acc >= sample_ft:
+                return (x, y)
+        return (px, py) if acc > 1e-3 else None
+
+    forward = walk(1)
+    backward = walk(-1)
+    # Choose the sample farther from SP if both exist
+    sample = None
+    if forward and backward:
+        df = (forward[0] - sx) ** 2 + (forward[1] - sy) ** 2
+        db = (backward[0] - sx) ** 2 + (backward[1] - sy) ** 2
+        sample = forward if df >= db else backward
+    else:
+        sample = forward or backward
+    if not sample:
+        return None
+    dx = sample[0] - sx
+    dy = sample[1] - sy
+    if abs(dx) < 1e-9 and abs(dy) < 1e-9:
+        return None
+    # Projected CRS: +X east, +Y north → 0° north, 90° east
+    deg = (math.degrees(math.atan2(dx, dy)) + 360.0) % 360.0
+    return round(deg, 1)
+
+
+def load_sp_xy(con: sqlite3.Connection, sp_guid: str) -> Optional[Tuple[float, float]]:
+    if not table_exists(con, "splicepoints"):
+        return None
+    row = con.execute(
+        "SELECT geom FROM splicepoints WHERE guid=?", (sp_guid,)
+    ).fetchone()
+    if not row or not row["geom"]:
+        return None
+    wkb = gpkg_to_wkb(row["geom"])
+    if not wkb:
+        return None
+    parts = wkb_to_xy_parts(wkb)
+    if not parts or not parts[0]:
+        return None
+    return parts[0][0]
+
+
+def load_cable_parts(
+    con: sqlite3.Connection, cable_guid: str
+) -> List[List[Tuple[float, float]]]:
+    if not table_exists(con, "cables"):
+        return []
+    row = con.execute(
+        "SELECT geom FROM cables WHERE guid=?", (cable_guid,)
+    ).fetchone()
+    if not row or not row["geom"]:
+        return []
+    wkb = gpkg_to_wkb(row["geom"])
+    if not wkb:
+        return []
+    return wkb_to_xy_parts(wkb)
 
 
 def connect_ro(path: str) -> sqlite3.Connection:
@@ -104,9 +327,10 @@ def build_detail(
         if row and row["station_id"]:
             station = row["station_id"]
 
-    # Cables at this SP
+    # Cables at this SP (+ geographic approach for geo-oriented magnifier)
     cables: List[Dict[str, Any]] = []
     cable_sizes: Dict[str, int] = {}
+    sp_xy = load_sp_xy(con, sp_guid)
     if table_exists(con, "cable_at_splice"):
         for r in con.execute(
             """
@@ -121,13 +345,17 @@ def build_detail(
             guid = r["cable_guid"]
             size = r["cable_size"] or r["fiber_count"] or 0
             cable_sizes[guid] = int(size)
-            cables.append(
-                {
-                    "guid": guid,
-                    "size": int(size),
-                    "is_drop": guid in drop_cables,
-                }
-            )
+            entry: Dict[str, Any] = {
+                "guid": guid,
+                "size": int(size),
+                "is_drop": guid in drop_cables,
+            }
+            if sp_xy is not None:
+                adeg = approach_deg_from_parts(sp_xy, load_cable_parts(con, guid))
+                if adeg is not None:
+                    entry["approach_deg"] = adeg
+                    entry["approach"] = compass_label(adeg)
+            cables.append(entry)
 
     # Equipment / tap
     tap: Optional[Dict[str, Any]] = None
@@ -329,7 +557,7 @@ def build_detail(
 
     kind = "tap" if tap else "splice"
     return {
-        "v": 1,
+        "v": 2,  # v2: optional approach_deg / approach on cables
         "guid": sp_guid,
         "station_id": station or "",
         "kind": kind,

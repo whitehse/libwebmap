@@ -4,6 +4,7 @@
  */
 
 #include "webmap.h"
+#include "webmap_schematic.h"
 
 /* Marker for host feature detection. */
 const char webmap_wasm_build_id[] = "libwebmap-0.1.0-no-emscripten";
@@ -39,6 +40,23 @@ int wm_load_wmap_tile(webmap_ctx_t *ctx, const uint8_t *data, size_t len)
     return webmap_load_wmap_tile(ctx, data, len);
 }
 
+/* P4.13: host decode-and-drop — free C cache after layer extract / GPU upload */
+__attribute__((export_name("webmap_drop_tile")))
+int wm_drop_tile(webmap_ctx_t *ctx, uint32_t z, uint32_t x, uint32_t y)
+{
+    webmap_tile_id_t id;
+    id.z = (uint8_t)z;
+    id.x = x;
+    id.y = y;
+    return webmap_drop_tile(ctx, id);
+}
+
+__attribute__((export_name("webmap_tile_count")))
+size_t wm_tile_count(const webmap_ctx_t *ctx)
+{
+    return webmap_tile_count(ctx);
+}
+
 __attribute__((export_name("webmap_next_event")))
 int wm_next_event(webmap_ctx_t *ctx, webmap_event_t *ev)
 {
@@ -69,4 +87,20 @@ __attribute__((export_name("webmap_wasm_build_id_ptr")))
 const char *wm_build_id_ptr(void)
 {
     return webmap_wasm_build_id;
+}
+
+/* P4.10 / ADR-020: pure geometry layout from splice_detail JSON */
+__attribute__((export_name("webmap_schematic_layout")))
+size_t wm_schematic_layout(const uint8_t *json, size_t json_len, float cx,
+                           float cy, float radius, uint8_t *out, size_t out_cap)
+{
+    return webmap_schematic_layout(json, json_len, cx, cy, radius, out,
+                                   out_cap);
+}
+
+__attribute__((export_name("webmap_schematic_blob_size")))
+size_t wm_schematic_blob_size(uint32_t n_cables, uint32_t n_fibers,
+                              uint32_t n_fuses)
+{
+    return webmap_schematic_blob_size(n_cables, n_fibers, n_fuses);
 }

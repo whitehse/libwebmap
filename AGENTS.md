@@ -120,6 +120,9 @@ python3 -m http.server -d demo 8765   # Chrome/Edge + WebGPU
 | 016 | Fiber hover magnifier + compact splice detail |
 | 017 | **Three-tier data boundary** (sources / packages / display) |
 | 018 | Fiber path visual trace (host highlight + path_index) |
+| 024 | **WASM host contract** (packing + staging + flat layers) |
+| 025 | **Freestanding WASM free-list heap** (P4.3 reclaim) |
+| 026 | **WASM basemap parse auto** (P4.13 decode-and-drop; `?wasm=0` → JS) |
 
 Host tools also include **`fiber2features`** (design DB → `.fmap` package),
 **`splice_diagram`** (design DB → HTML under `demo/splice_diagrams/`), and
@@ -137,3 +140,4 @@ Host tools also include **`fiber2features`** (design DB → `.fmap` package),
 | `webmap_get_tile_layers` | GPU buffers for a basemap tile |
 | `webmap_next_event` | Pull events |
 | `webmap_wmap_encode` / `webmap_mvt_decode` | Format helpers / tool |
+| `webmap_schematic_layout` | Meet-point geometry from splice_detail JSON (P4.10 / ADR-020) |

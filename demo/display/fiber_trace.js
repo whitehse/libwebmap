@@ -10,6 +10,12 @@ import {
   TRACE_MAX_HOPS_UI,
   styleLineWidthPx,
 } from "./fiber_style.js";
+import {
+  buildPathBudget,
+  lossSeverity,
+  fmtLossDb,
+} from "./optical_budget.js";
+import { estimateJsonBytes } from "./mem_stats.js";
 
 const R = 6378137.0;
 const MAX_HIGHLIGHT_VERTS = 50000;
@@ -76,6 +82,7 @@ export function createFiberTrace(opts) {
     onChange = () => {},
     listEl = null,
     setDimFactor = () => {},
+    memStats = null,
   } = opts;
 
   let baseUrl = "./fiber_data";
@@ -86,6 +93,9 @@ export function createFiberTrace(opts) {
   /** @type {Map<number, object>|null} */
   let pathsById = null;
   let pathsLoadPromise = null;
+  /** Bytes of path_index JSON retained in JS (meta + cable map + paths). */
+  let pathIndexBytes = 0;
+  let highlightGpuBytes = 0;
 
   /** @type {number[]} */
   let candidates = [];
@@ -95,15 +105,41 @@ export function createFiberTrace(opts) {
   let highlightGpu = null;
   let lastCableGuid = "";
 
+  function refreshMemStats() {
+    if (!memStats) return;
+    memStats.setRetained("path_index_js", pathIndexBytes);
+    memStats.setCount(
+      "path_index_paths",
+      pathsById ? pathsById.size : meta?.path_count || 0
+    );
+    memStats.setCount(
+      "path_index_cables",
+      cableToPaths ? Object.keys(cableToPaths).length : 0
+    );
+  }
+
+  function getMemReport() {
+    return {
+      path_index_js: pathIndexBytes,
+      paths_loaded: pathsById ? pathsById.size : 0,
+      cables: cableToPaths ? Object.keys(cableToPaths).length : 0,
+      highlight_gpu: highlightGpuBytes,
+    };
+  }
+
   function destroyHighlight() {
     if (highlightGpu) {
       try {
+        if (memStats && highlightGpuBytes) {
+          memStats.subGpu("trace_gpu", highlightGpuBytes);
+        }
         highlightGpu.vb?.destroy?.();
         highlightGpu.ib?.destroy?.();
       } catch {
         /* ignore */
       }
       highlightGpu = null;
+      highlightGpuBytes = 0;
     }
   }
 
@@ -112,9 +148,76 @@ export function createFiberTrace(opts) {
     selectedPathId = null;
     lastCableGuid = "";
     destroyHighlight();
+    /* full package clear (load) zeros index; select-clear keeps path_index */
     setDimFactor(1.0);
     renderList();
     if (!silent) onChange();
+  }
+
+  function severityClass(totalDb) {
+    const s = lossSeverity(totalDb);
+    if (s === "ok") return "loss-ok";
+    if (s === "warn") return "loss-warn";
+    if (s === "critical") return "loss-crit";
+    return "";
+  }
+
+  function renderBudgetHtml(path) {
+    const budget = buildPathBudget(path);
+    const sev = severityClass(budget.total_loss_db);
+    const steps = budget.steps.filter(
+      (s) => s.kind === "equipment" || s.kind === "source"
+    );
+    // Show source + equipment hops (skip zero-loss cable stubs in compact UI)
+    const rows = steps
+      .slice(0, TRACE_MAX_HOPS_UI + 1)
+      .map((s) => {
+        const role =
+          s.role === "source"
+            ? "src"
+            : s.role === "pass_through"
+              ? "PT"
+              : s.role === "input"
+                ? "IN"
+                : s.role === "drop"
+                  ? "drop"
+                  : s.role || "";
+        const loss =
+          s.kind === "source"
+            ? "0"
+            : s.loss_db
+              ? s.loss_db.toFixed(2)
+              : "0";
+        const cum = s.cumulative_db.toFixed(2);
+        return (
+          `<div class="budget-hop role-${s.role || "eq"}">` +
+          `<span class="budget-role">${role}</span>` +
+          `<span class="budget-label">${escapeHtml(s.label)}</span>` +
+          `<span class="budget-loss">${loss}</span>` +
+          `<span class="budget-cum">${cum}</span>` +
+          `</div>`
+        );
+      })
+      .join("");
+    return (
+      `<div class="path-budget ${sev}">` +
+      `<div class="budget-head">` +
+      `<span class="budget-src">◉ Light: source → end</span>` +
+      `<span class="budget-total">Σ ${fmtLossDb(budget.total_loss_db)}</span>` +
+      `</div>` +
+      `<div class="budget-cols"><span></span><span></span><span>dB</span><span>Σ</span></div>` +
+      `<div class="budget-body">${rows}</div>` +
+      `<div class="budget-note">Equipment splits only · distance TBD</div>` +
+      `</div>`
+    );
+  }
+
+  function escapeHtml(s) {
+    return String(s || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
   }
 
   function renderList() {
@@ -135,21 +238,30 @@ export function createFiberTrace(opts) {
       const end = p?.end_kind || "";
       const fiber = p?.start?.fiber != null ? `f${p.start.fiber}` : "";
       const sel = pid === selectedPathId ? " path-sel" : "";
+      const sev = severityClass(p?.total_loss_db);
       return (
-        `<button type="button" class="path-item${sel}" data-path-id="${pid}">` +
+        `<button type="button" class="path-item${sel} ${sev}" data-path-id="${pid}">` +
         `<span class="path-id">#${pid}</span> ` +
-        `<span class="path-meta">${fiber} · ${hops} hops · ${end} · ${loss}</span>` +
+        `<span class="path-meta">${fiber} · ${hops} hops · ${end} · ` +
+        `<span class="path-loss">${loss}</span></span>` +
         `</button>`
       );
     });
+
+    let budgetBlock = "";
+    if (selectedPathId != null && pathsById?.has(selectedPathId)) {
+      budgetBlock = renderBudgetHtml(pathsById.get(selectedPathId));
+    }
+
     listEl.innerHTML =
       `<div class="path-list-head">` +
       `<strong>Fiber paths</strong> ` +
       `<button type="button" id="path-clear" class="path-clear">Clear</button>` +
       `</div>` +
       `<div class="path-list-body">${rows.join("")}</div>` +
+      budgetBlock +
       (lastCableGuid
-        ? `<div class="path-list-foot">cable ${lastCableGuid.slice(0, 8)}…</div>`
+        ? `<div class="path-list-foot">cable ${lastCableGuid.slice(0, 8)}… · light from path start</div>`
         : "");
 
     listEl.querySelector("#path-clear")?.addEventListener("click", () => {
@@ -184,7 +296,21 @@ export function createFiberTrace(opts) {
         }
       }
       pathsById = map;
-      log(`path_index: loaded ${map.size} paths`);
+      let pathsBytes = 48 * map.size;
+      for (const obj of map.values()) {
+        pathsBytes += estimateJsonBytes(obj);
+      }
+      /* Recompute full retain (meta + cable map + parsed paths). */
+      pathIndexBytes =
+        estimateJsonBytes(meta) +
+        estimateJsonBytes(cableToPaths) +
+        pathsBytes;
+      refreshMemStats();
+      log(
+        `path_index: loaded ${map.size} paths · ~${
+          memStats ? memStats.formatBytes(pathIndexBytes) : "?"
+        } JS (P4.0)`
+      );
       return map;
     })();
     try {
@@ -207,7 +333,9 @@ export function createFiberTrace(opts) {
     cableToPaths = null;
     pathsById = null;
     pathsLoadPromise = null;
+    pathIndexBytes = 0;
     enabled = false;
+    refreshMemStats();
 
     if (!man || !man.path_index) {
       log("path_index: not in package (path trace disabled)");
@@ -229,9 +357,13 @@ export function createFiberTrace(opts) {
       meta = await mRes.json();
       cableToPaths = await cRes.json();
       enabled = true;
+      pathIndexBytes =
+        estimateJsonBytes(meta) + estimateJsonBytes(cableToPaths);
+      refreshMemStats();
       log(
         `path_index ready · format ${meta.path_index_format ?? "?"} · ` +
-          `${meta.path_count ?? "?"} paths · ${Object.keys(cableToPaths).length} cables`
+          `${meta.path_count ?? "?"} paths · ${Object.keys(cableToPaths).length} cables · ` +
+          `~${memStats ? memStats.formatBytes(pathIndexBytes) : "?"} JS (paths lazy)`
       );
       return true;
     } catch (e) {
@@ -285,8 +417,9 @@ export function createFiberTrace(opts) {
       inds[ii++] = b + 1;
       inds[ii++] = b;
     }
+    const vbSize = Math.max(vi * 24, 24);
     const vb = device.createBuffer({
-      size: Math.max(vi * 24, 24),
+      size: vbSize,
       usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
       mappedAtCreation: true,
     });
@@ -294,8 +427,9 @@ export function createFiberTrace(opts) {
       new Uint8Array(outVerts, 0, vi * 24)
     );
     vb.unmap();
+    const ibSize = Math.max(ii * 4, 4);
     const ib = device.createBuffer({
-      size: Math.max(ii * 4, 4),
+      size: ibSize,
       usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
       mappedAtCreation: true,
     });
@@ -303,6 +437,8 @@ export function createFiberTrace(opts) {
       new Uint8Array(inds.buffer, 0, ii * 4)
     );
     ib.unmap();
+    highlightGpuBytes = vbSize + ibSize;
+    if (memStats) memStats.addGpu("trace_gpu", highlightGpuBytes);
     highlightGpu = {
       vb,
       ib,
@@ -312,6 +448,7 @@ export function createFiberTrace(opts) {
       fiberKind: "trace",
       isTrace: true,
       order: 99,
+      _gpuBytes: highlightGpuBytes,
     };
     return highlightGpu;
   }
@@ -333,10 +470,12 @@ export function createFiberTrace(opts) {
     setDimFactor(FIBER_DIM_FACTOR);
     renderList();
     onChange();
+    const budget = buildPathBudget(p);
     const hops = (p.hops || []).slice(0, TRACE_MAX_HOPS_UI);
     log(
       `trace path #${pathId} · ${p.hop_count ?? hops.length} hops · ` +
-        `end=${p.end_kind || "?"} · verts=${lonlat.length}`
+        `end=${p.end_kind || "?"} · loss ${fmtLossDb(budget.total_loss_db)} · ` +
+        `light: start→end · verts=${lonlat.length}`
     );
     return true;
   }
@@ -344,8 +483,9 @@ export function createFiberTrace(opts) {
   /**
    * Click cable/drop with plant GUID → candidate paths.
    * @param {string} cableGuid
+   * @param {number|null|undefined} fiber optional 1-based fiber to prefer
    */
-  async function selectByCable(cableGuid) {
+  async function selectByCable(cableGuid, fiber) {
     if (!enabled) {
       log("Path index not available for this package");
       return false;
@@ -373,7 +513,25 @@ export function createFiberTrace(opts) {
       log("path_index load failed: " + e.message);
       return false;
     }
-    candidates = ids.slice(0, TRACE_MAX_CANDIDATES);
+
+    let filtered = ids.slice();
+    const fnum = fiber != null ? Number(fiber) : NaN;
+    if (Number.isFinite(fnum) && fnum > 0 && pathsById) {
+      const match = ids.filter((pid) => {
+        const p = pathsById.get(pid);
+        if (!p) return false;
+        if (p.start?.fiber === fnum) return true;
+        if (p.end?.fiber === fnum) return true;
+        return (p.hops || []).some(
+          (h) =>
+            h.fiber === fnum &&
+            String(h.cable_guid || "").toLowerCase() === g
+        );
+      });
+      if (match.length) filtered = match;
+    }
+
+    candidates = filtered.slice(0, TRACE_MAX_CANDIDATES);
     if (candidates.length === 1) {
       selectPath(candidates[0]);
     } else {
@@ -382,9 +540,17 @@ export function createFiberTrace(opts) {
       setDimFactor(FIBER_DIM_FACTOR);
       renderList();
       onChange();
-      log(`${candidates.length} paths on cable ${g.slice(0, 8)}… — pick one`);
+      const fibNote = Number.isFinite(fnum) ? ` f${fnum}` : "";
+      log(
+        `${candidates.length} paths on cable ${g.slice(0, 8)}…${fibNote} — pick one`
+      );
     }
     return true;
+  }
+
+  /** Convenience: same as selectByCable(guid, fiber). */
+  function selectByCableFiber(cableGuid, fiber) {
+    return selectByCable(cableGuid, fiber);
   }
 
   function halfWidthForDraw(g, cam, mpp) {
@@ -401,10 +567,13 @@ export function createFiberTrace(opts) {
   return {
     load,
     selectByCable,
+    selectByCableFiber,
     selectPath,
     clear,
     collectDraws,
     halfWidthForDraw,
+    refreshMemStats,
+    getMemReport,
     get enabled() {
       return enabled;
     },

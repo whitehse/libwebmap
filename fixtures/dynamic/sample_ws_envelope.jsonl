@@ -1,0 +1,1 @@
+{"type":"STATE_CHANGED","ns":"map.dynamic","key":"feature/fiber/span-demo-1","op":"put","value":{"id":"span-demo-1","class":"fiber","status":"maint","updated_at":"2026-07-18T13:00:00Z","lon":-95.95,"lat":36.14},"request_id":"01JDEMO000000000000000"}

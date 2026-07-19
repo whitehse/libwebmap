@@ -7,6 +7,31 @@
 
 import { createFiberLayer } from "./display/fiber_layer.js";
 import { createFiberTrace } from "./display/fiber_trace.js";
+import { createMemStats } from "./display/mem_stats.js";
+import {
+  createTileCache,
+  destroyGpuLayers,
+  parseMaxTilesQuery,
+} from "./display/tile_cache.js";
+import { createWasmHost, parseWasmQuery } from "./display/wasm_host.js";
+import {
+  createWeatherLayer,
+  parseWeatherOpacityQuery,
+  parseWeatherQuery,
+} from "./display/weather_layer.js";
+import {
+  createDynamicFeed,
+  parseFeedQuery,
+} from "./display/dynamic_feed.js";
+import {
+  createSchematicLayoutService,
+  parseSchematicQuery,
+} from "./display/schematic_layout.js";
+import {
+  createGlassLensGpu,
+  parseGlassGpuQuery,
+} from "./display/glass_lens_gpu.js";
+import { parseWmap } from "./display/wmap_parse.js";
 
 const logEl = document.getElementById("log");
 const statusEl = document.getElementById("status");
@@ -406,64 +431,6 @@ function styleCasing(name) {
   return null;
 }
 
-/* ── .wmap parser ──────────────────────────────────────────────────── */
-
-function u32(dv, o) {
-  return dv.getUint32(o, true);
-}
-function u16(dv, o) {
-  return dv.getUint16(o, true);
-}
-
-function parseWmap(buf) {
-  const dv = new DataView(buf);
-  if (buf.byteLength < 24) throw new Error("wmap too short");
-  const magic = u32(dv, 0);
-  if (magic !== 0x50414d57) throw new Error("bad magic");
-  const version = u32(dv, 4);
-  if (version !== 1) throw new Error("bad version " + version);
-  const z = dv.getUint8(8);
-  const x = u32(dv, 12);
-  const y = u32(dv, 16);
-  const nLayers = u32(dv, 20);
-  let off = 24;
-  const layers = [];
-  for (let i = 0; i < nLayers; i++) {
-    const kind = dv.getUint8(off++);
-    const fclass = dv.getUint8(off++);
-    const nlen = u16(dv, off);
-    off += 2;
-    const name = new TextDecoder().decode(new Uint8Array(buf, off, nlen));
-    off += nlen;
-    const extent = u32(dv, off);
-    off += 4;
-    const vc = u32(dv, off);
-    off += 4;
-    const ic = u32(dv, off);
-    off += 4;
-    const interleaved = new ArrayBuffer(vc * 12);
-    const fview = new DataView(interleaved);
-    for (let v = 0; v < vc; v++) {
-      const px = dv.getFloat32(off, true);
-      off += 4;
-      const py = dv.getFloat32(off, true);
-      off += 4;
-      const c = u32(dv, off);
-      off += 4;
-      fview.setFloat32(v * 12, px, true);
-      fview.setFloat32(v * 12 + 4, py, true);
-      fview.setUint32(v * 12 + 8, c, true);
-    }
-    const indices = new Uint32Array(ic);
-    for (let j = 0; j < ic; j++) {
-      indices[j] = u32(dv, off);
-      off += 4;
-    }
-    layers.push({ kind, fclass, name, extent, interleaved, indices, vc, ic });
-  }
-  return { z, x, y, layers };
-}
-
 /* ── Web Mercator helpers ──────────────────────────────────────────── */
 
 const R = 6378137;
@@ -635,8 +602,9 @@ fn unpack_rgba(c: u32) -> vec4f {
   let r = f32(c & 0xFFu) / 255.0;
   let g = f32((c >> 8u) & 0xFFu) / 255.0;
   let b = f32((c >> 16u) & 0xFFu) / 255.0;
+  // Honor vertex alpha (weather opacity); basemap/fiber use a≈1.0
   let a = f32((c >> 24u) & 0xFFu) / 255.0;
-  return vec4f(r, g, b, max(a, 0.92));
+  return vec4f(r, g, b, a);
 }
 
 @vertex
@@ -662,12 +630,59 @@ fn fs_main(i: VSOut) -> @location(0) vec4f {
 `;
 
 let device, context, pipelineFill, uniformBuf, bindGroupLayout, bindGroup;
-/** @type {Map<string, object[]>} key z/x/y → gpu layer draws */
-const tileGpu = new Map();
 /** Fiber feature display (data .fmap → lines GPU + Canvas taps) */
 let fiberLayer = null;
 /** Optical path trace (path_index + highlight mesh) */
 let fiberTrace = null;
+/** P4.7 weather / alert package host paint */
+let weatherLayer = null;
+/** P4.9 map.dynamic feed (fixture JSONL or ?feed=ws://) */
+let dynamicFeed = null;
+/** P4.0 memory measurement harness (docs/guides/memory-attribution.md) */
+const memStats = createMemStats({ log });
+/** P4.2 host max_tiles (shared default; ?max_tiles=0 unlimited) */
+const hostMaxTiles = parseMaxTilesQuery();
+/**
+ * P4.13: basemap parse mode — auto (default) tries WASM decode-and-drop,
+ * ?wasm=1 forces WASM, ?wasm=0 forces JS.
+ * @type {"auto"|"on"|"off"}
+ */
+const wasmMode = parseWasmQuery();
+const wantWasmBasemap = wasmMode !== "off";
+/** P4.7: weather layer on by default; ?weather=0 disables */
+const weatherEnabled = parseWeatherQuery();
+/** P4.7: fill/line alpha 0..1 (default 0.45); ?weather_opacity= */
+const weatherOpacityInit = parseWeatherOpacityQuery();
+/** P4.9: dynamic feed config from query string */
+const feedCfg = parseFeedQuery();
+/** P4.11: schematic layout mode (auto|wasm|js) */
+const schematicMode = parseSchematicQuery();
+/** P4.12: optional WebGPU glass lens chrome (?glass_gpu=1) */
+const glassGpuEnabled = parseGlassGpuQuery();
+/** @type {ReturnType<typeof createWasmHost>|null} */
+let wasmHost = null;
+/** @type {ReturnType<typeof createSchematicLayoutService>|null} */
+let schematicLayout = null;
+/** @type {ReturnType<typeof createGlassLensGpu>|null} */
+let glassLensGpu = null;
+/** Basemap GPU cache (LRU). Replaces unbounded Map. */
+const basemapCache = createTileCache({
+  maxTiles: hostMaxTiles,
+  name: "basemap",
+  onEvict: (_key, layers) => {
+    const b = destroyGpuLayers(/** @type {object[]} */ (layers));
+    if (b) memStats.subGpu("basemap_gpu", b);
+  },
+  onReplace: (_key, layers) => {
+    const b = destroyGpuLayers(/** @type {object[]} */ (layers));
+    if (b) memStats.subGpu("basemap_gpu", b);
+  },
+});
+/** @type {Set<string>} keys present in package (z/x/y) */
+let basemapAvailable = new Set();
+/** @type {Map<string, Promise<void>>} */
+const basemapInflight = new Map();
+let basemapEnsureGen = 0;
 let availableZooms = [];
 let fiberZmin = 10;
 let fiberZmax = 14;
@@ -699,6 +714,9 @@ async function initGpu() {
   window.addEventListener("resize", resize);
 
   const module = device.createShaderModule({ code: WGSL });
+  if (glassGpuEnabled) {
+    glassLensGpu = createGlassLensGpu({ device, format, log });
+  }
   bindGroupLayout = device.createBindGroupLayout({
     entries: [
       {
@@ -1040,8 +1058,9 @@ function uploadLineExtruded(tile, layer, rgba, useVertexColor = false) {
 }
 
 function createMesh(vertBuf, indices, indexCount, meta) {
+  const vbSize = Math.max(vertBuf.byteLength, 24);
   const vb = device.createBuffer({
-    size: Math.max(vertBuf.byteLength, 24),
+    size: vbSize,
     usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
     mappedAtCreation: true,
   });
@@ -1055,18 +1074,23 @@ function createMesh(vertBuf, indices, indexCount, meta) {
           indices.byteOffset + indices.byteLength
         )
       : indices;
+  const ibSize = Math.max(indexCount * 4, 4);
   const ib = device.createBuffer({
-    size: Math.max(indexCount * 4, 4),
+    size: ibSize,
     usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
     mappedAtCreation: true,
   });
   new Uint8Array(ib.getMappedRange()).set(new Uint8Array(indBytes));
   ib.unmap();
 
+  const gpuBytes = vbSize + ibSize;
+  memStats.addGpu("basemap_gpu", gpuBytes);
+
   return {
     vb,
     ib,
     indexCount,
+    _gpuBytes: gpuBytes,
     ...meta,
   };
 }
@@ -1144,6 +1168,74 @@ function writeHalfWidthAndDim(halfWidthM, fiberDim) {
  * Collect GPU draws for the current viewport.
  * Frustum-culls basemap; fiber lines come from demo/display/fiber_layer.
  */
+/**
+ * Request basemap tiles for the viewport; LRU-touches residents.
+ * Returns a Promise when new fetches are started (P4.2 lazy load).
+ * @param {number} tileZ
+ * @returns {Promise<void>}
+ */
+function ensureBasemapTiles(tileZ) {
+  const range = visibleTileRange(tileZ, 0.35);
+  if (!range) return Promise.resolve();
+  const gen = ++basemapEnsureGen;
+  const jobs = [];
+  for (let x = range.minX; x <= range.maxX; x++) {
+    for (let y = range.minY; y <= range.maxY; y++) {
+      const key = `${tileZ}/${x}/${y}`;
+      if (!basemapAvailable.has(key)) continue;
+      if (basemapCache.has(key)) {
+        basemapCache.touch(key);
+        continue;
+      }
+      if (basemapInflight.has(key)) {
+        jobs.push(basemapInflight.get(key));
+        continue;
+      }
+      jobs.push(loadBasemapTile(key));
+    }
+  }
+  if (!jobs.length) return Promise.resolve();
+  return Promise.all(jobs).then(() => {
+    if (gen !== basemapEnsureGen) return;
+    memStats.setCount("basemap_tiles", basemapCache.size);
+  });
+}
+
+/**
+ * @param {string} key z/x/y
+ */
+async function loadBasemapTile(key) {
+  if (basemapInflight.has(key) || basemapCache.has(key)) return;
+  const parts = key.split("/");
+  const z = Number(parts[0]);
+  const x = Number(parts[1]);
+  const y = Number(parts[2]);
+  const url = `./basemap/${z}/${x}/${y}.wmap`;
+  const p = (async () => {
+    try {
+      const r = await fetch(url);
+      if (!r.ok) return;
+      const buf = await r.arrayBuffer();
+      let tile;
+      if (wasmHost?.ready) {
+        tile = wasmHost.parseWmapViaWasm(buf);
+      } else {
+        tile = parseWmap(buf);
+      }
+      const gpuLayers = tileToGpuLayers(tile, false);
+      if (gpuLayers.length) {
+        basemapCache.set(key, gpuLayers);
+      }
+    } catch (e) {
+      log("tile fail " + url + ": " + e.message);
+    } finally {
+      basemapInflight.delete(key);
+    }
+  })();
+  basemapInflight.set(key, p);
+  await p;
+}
+
 function collectDraws(tileZ) {
   const draws = [];
   const range = visibleTileRange(tileZ, 0.2);
@@ -1151,7 +1243,7 @@ function collectDraws(tileZ) {
 
   for (let x = range.minX; x <= range.maxX; x++) {
     for (let y = range.minY; y <= range.maxY; y++) {
-      const layers = tileGpu.get(`${tileZ}/${x}/${y}`);
+      const layers = basemapCache.get(`${tileZ}/${x}/${y}`);
       if (!layers) continue;
       for (let i = 0; i < layers.length; i++) draws.push(layers[i]);
     }
@@ -1162,6 +1254,12 @@ function collectDraws(tileZ) {
   }
   if (fiberTrace) {
     fiberTrace.collectDraws(draws);
+  }
+  if (weatherLayer) {
+    weatherLayer.collectDraws(draws);
+  }
+  if (dynamicFeed) {
+    dynamicFeed.collectDraws(draws);
   }
 
   draws.sort((a, b) => (a.order ?? 50) - (b.order ?? 50));
@@ -1180,6 +1278,14 @@ function drawHalfWidth(g, mpp) {
   if (fiberLayer) {
     const fw = fiberLayer.halfWidthForDraw(g, cam, mpp);
     if (fw != null) return fw;
+  }
+  if (weatherLayer) {
+    const ww = weatherLayer.halfWidthForDraw(g, cam, mpp);
+    if (ww != null) return ww;
+  }
+  if (dynamicFeed) {
+    const dw = dynamicFeed.halfWidthForDraw(g, cam, mpp);
+    if (dw != null) return dw;
   }
   if (g.kind === "line") {
     const baseName = g.name.replace(/_casing$/, "");
@@ -1207,6 +1313,10 @@ function frame(now) {
   updateZoomSmooth(dt, now);
 
   const tileZ = updateActiveTileZoom(cam.zoom);
+  ensureBasemapTiles(tileZ);
+  if (fiberLayer?.ensureVisibleTiles) {
+    fiberLayer.ensureVisibleTiles(cam, view, metersPerPixel);
+  }
   const draws = collectDraws(tileZ);
   const mpp = metersPerPixel();
 
@@ -1258,6 +1368,22 @@ function frame(now) {
     writeCameraUniforms(0, 1.0);
   }
 
+  /* P4.12: WebGPU glass lens chrome under Canvas schematic */
+  const useGpuGlass =
+    glassGpuEnabled && glassLensGpu && fiberLayer?.magnifierOpen;
+  if (useGpuGlass) {
+    const ll = fiberLayer.getLensLayout(view);
+    if (ll) {
+      glassLensGpu.draw(pass, {
+        devCx: ll.devCx,
+        devCy: ll.devCy,
+        rDev: ll.rDev,
+        canvasW: canvas.width,
+        canvasH: canvas.height,
+      });
+    }
+  }
+
   pass.end();
   device.queue.submit([enc.finish()]);
 
@@ -1266,17 +1392,31 @@ function frame(now) {
     labelCtx.clearRect(0, 0, labelCanvas.width, labelCanvas.height);
   }
   if (fiberLayer) {
-    fiberLayer.paintSymbols(cam, view, metersPerPixel);
+    fiberLayer.paintSymbols(cam, view, metersPerPixel, {
+      magnifierChrome: useGpuGlass ? "gpu" : "canvas",
+    });
   }
 
   // Throttle DOM status (layout work was stealing frames during zoom)
   if (now - lastStatusT > 200) {
     lastStatusT = now;
     const fz = fiberLayer ? fiberLayer.selectFiberTileZoom(cam.zoom) : null;
+    const bt = basemapCache.size;
+    const bm = basemapCache.maxTiles;
+    const ft = fiberLayer?.size ?? 0;
+    const fm = fiberLayer?.maxTiles ?? hostMaxTiles;
     setStatus(
       `<span class="ok">WebGPU</span> · z ${cam.zoom.toFixed(2)} · base z${tileZ}` +
         (fz != null && fiberLayer?.show ? ` · fiber z${fz}` : "") +
-        ` · ${draws.length} draws`
+        (glassGpuEnabled ? " · glass:gpu" : "") +
+        ` · ${draws.length} draws` +
+        ` · tiles base ${bt}${bm > 0 ? "/" + bm : ""}` +
+        (fiberLayer?.show
+          ? ` fiber ${ft}${fm > 0 ? "/" + fm : ""}`
+          : "") +
+        (basemapCache.evictions || fiberLayer?.evictions
+          ? ` · evict ${basemapCache.evictions + (fiberLayer?.evictions || 0)}`
+          : "")
     );
   }
 
@@ -1366,53 +1506,39 @@ function tileToGpuLayers(tile, isFiber) {
   return gpuLayers;
 }
 
-async function loadTilePyramid(manifest, baseUrl, targetMap, isFiber) {
-  const byZoom = new Map();
-  let loaded = 0;
-  const queue = [...(manifest.tiles || [])];
-  const workers = 8;
-  async function worker() {
-    while (queue.length) {
-      const t = queue.shift();
-      if (!t) break;
-      const url = `${baseUrl}/${t.z}/${t.x}/${t.y}.wmap`;
-      try {
-        const r = await fetch(url);
-        if (!r.ok) continue;
-        const buf = await r.arrayBuffer();
-        const tile = parseWmap(buf);
-        const key = `${tile.z}/${tile.x}/${tile.y}`;
-        const gpuLayers = tileToGpuLayers(tile, isFiber);
-        if (gpuLayers.length) {
-          targetMap.set(key, gpuLayers);
-          if (!byZoom.has(tile.z)) byZoom.set(tile.z, 0);
-          byZoom.set(tile.z, byZoom.get(tile.z) + 1);
-          loaded++;
-        }
-      } catch (e) {
-        log("tile fail " + url + ": " + e.message);
-      }
-    }
-  }
-  await Promise.all(Array.from({ length: workers }, () => worker()));
-  return { loaded, byZoom, total: manifest.tiles?.length ?? 0 };
-}
-
+/**
+ * Index basemap package and seed viewport tiles (P4.2 lazy + max_tiles).
+ * Does not preload the full pyramid.
+ */
 async function loadTiles(manifest) {
-  const { loaded, byZoom, total } = await loadTilePyramid(
-    manifest,
-    "./basemap",
-    tileGpu,
-    false
-  );
+  basemapCache.clear();
+  basemapAvailable = new Set();
+  const byZoom = new Map();
+  for (const t of manifest.tiles || []) {
+    const key = `${t.z}/${t.x}/${t.y}`;
+    basemapAvailable.add(key);
+    if (!byZoom.has(t.z)) byZoom.set(t.z, 0);
+    byZoom.set(t.z, byZoom.get(t.z) + 1);
+  }
   availableZooms = [...byZoom.keys()].sort((a, b) => a - b);
   zmin = availableZooms[0] ?? 8;
   zmax = availableZooms[availableZooms.length - 1] ?? 12;
   cam.minZoom = Math.max(6, Math.min(zmin, fiberZmin) - 1);
   cam.maxZoom = Math.max(18, Math.max(zmax, fiberZmax) + 6);
   activeTileZ = selectIdealTileZoom(cam.zoom);
+  await ensureBasemapTiles(activeTileZ);
+  memStats.setCount("basemap_tiles", basemapCache.size);
+  const total = basemapAvailable.size;
   log(
-    `basemap ${loaded}/${total} tiles (z ${availableZooms.join(",") || "—"})`
+    `basemap package ${total} tiles (z ${availableZooms.join(",") || "—"}) · ` +
+      `seed ${basemapCache.size}` +
+      (hostMaxTiles > 0 ? ` · max_tiles=${hostMaxTiles}` : " · max_tiles=∞") +
+      " (P4.2 lazy)"
+  );
+  const snap = memStats.snapshot();
+  log(
+    `mem basemap GPU ${memStats.formatBytes(snap.buckets.basemap_gpu)} · ` +
+      `${basemapCache.size} tiles resident`
   );
 }
 
@@ -1437,7 +1563,8 @@ async function loadFiberTiles() {
     cam.minZoom = Math.max(6, Math.min(zmin, fiberZmin) - 1);
     cam.maxZoom = Math.max(18, Math.max(zmax, fiberZmax) + 6);
     log(
-      `fiber data ${stats.loaded}/${stats.total} tiles (z ${stats.availableZooms.join(",") || "—"}) · ` +
+      `fiber package ${stats.total} tiles (z ${stats.availableZooms.join(",") || "—"}) · ` +
+        `lazy max_tiles=${hostMaxTiles > 0 ? hostMaxTiles : "∞"} · ` +
         `taps≥z${fiberTapZmin} · fmap_v${man.fmap_version ?? "?"} · ` +
         `feats cables=${man.features?.cables ?? "?"} drops=${man.features?.drops ?? "?"} ` +
         `taps=${man.features?.taps ?? "?"} splices=${man.features?.splices ?? "?"}` +
@@ -1488,7 +1615,7 @@ canvas.addEventListener("pointerdown", (e) => {
 canvas.addEventListener("pointerup", (e) => {
   dragging = false;
   canvas.style.cursor = "";
-  // Click (not drag): cable → path trace; tap/splice → diagram
+  // Click (not drag): magnifier fiber → path trace; cable → paths; tap/splice → diagram
   if (
     !ptrDidDrag &&
     Math.hypot(e.clientX - ptrDownX, e.clientY - ptrDownY) < 6 &&
@@ -1497,15 +1624,29 @@ canvas.addEventListener("pointerup", (e) => {
     const rect = canvas.getBoundingClientRect();
     const cssX = e.clientX - rect.left;
     const cssY = e.clientY - rect.top;
-    const hit = fiberLayer.pick(cssX, cssY, view, cam, metersPerPixel);
-    if (hit && (hit.kind === "cable" || hit.kind === "drop")) {
-      if (fiberTrace?.enabled) {
-        fiberTrace.selectByCable(hit.cable_guid || "");
-      } else {
-        log("Path index not available for this package");
-      }
+    // Magnifier explore / fiber-chip trace takes priority
+    if (
+      fiberLayer.magnifierOpen &&
+      fiberLayer.handleClick(cssX, cssY, view, {
+        altKey: e.altKey,
+        detail: e.detail,
+      })
+    ) {
+      /* handled */
     } else {
-      fiberLayer.handleClick(cssX, cssY, view);
+      const hit = fiberLayer.pick(cssX, cssY, view, cam, metersPerPixel);
+      if (hit && (hit.kind === "cable" || hit.kind === "drop")) {
+        if (fiberTrace?.enabled) {
+          fiberTrace.selectByCable(hit.cable_guid || "");
+        } else {
+          log("Path index not available for this package");
+        }
+      } else {
+        fiberLayer.handleClick(cssX, cssY, view, {
+          altKey: e.altKey,
+          detail: e.detail,
+        });
+      }
     }
   }
 });
@@ -1556,7 +1697,6 @@ canvas.addEventListener(
   "wheel",
   (e) => {
     e.preventDefault();
-    if (fiberLayer) fiberLayer.cancelHover();
     // Use cached view size + offsetLeft/Top-free coords from the event target.
     const rect = canvas.getBoundingClientRect();
     // Keep view.w/h fresh if the window moved without a resize event.
@@ -1564,6 +1704,13 @@ canvas.addEventListener(
     view.h = Math.max(1, rect.height);
     const sx = e.clientX - rect.left;
     const sy = e.clientY - rect.top;
+
+    // Magnifier zoom (explore strands) takes priority over map zoom
+    if (fiberLayer?.handleWheel?.(sx, sy, view, e.deltaY)) {
+      return;
+    }
+
+    if (fiberLayer) fiberLayer.cancelHover();
 
     // Stable zoom-around point for the whole gesture (do not re-sample
     // intermediate animated zoom — that causes hesitation/jitter).
@@ -1612,32 +1759,78 @@ if (sidebarToggle && wrapEl) {
   });
 }
 
-/* ── Optional WASM ─────────────────────────────────────────────────── */
+/** P4.7: sidebar opacity slider + enable checkbox */
+function wireWeatherControls() {
+  const range = document.getElementById("weather-opacity");
+  const val = document.getElementById("weather-opacity-val");
+  const en = document.getElementById("weather-enable");
+  if (!weatherLayer) return;
+  if (range) {
+    range.value = String(Math.round(weatherLayer.opacity * 100));
+    if (val) val.textContent = weatherLayer.opacity.toFixed(2);
+    range.addEventListener("input", () => {
+      const o = Number(range.value) / 100;
+      weatherLayer.setOpacity(o);
+      if (val) val.textContent = weatherLayer.opacity.toFixed(2);
+    });
+  }
+  if (en) {
+    en.checked = weatherLayer.enabled;
+    en.addEventListener("change", () => {
+      weatherLayer.setEnabled(en.checked);
+    });
+  }
+}
+
+/* ── WASM basemap parse (P4.5 opt-in → P4.13 auto / decode-and-drop) ─ */
 
 async function tryWasm() {
+  if (!wantWasmBasemap) {
+    memStats.setWasmMemory(null);
+    memStats.setParsePath("js");
+    log("Basemap parse: JS (?wasm=0)");
+    return;
+  }
   try {
     const res = await fetch("./webmap.wasm");
     if (!res.ok) {
-      log("webmap.wasm not present (demo uses native .wmap parse)");
+      if (wasmMode === "on") {
+        log("webmap.wasm missing but ?wasm=1 — falling back to JS parse");
+      } else {
+        log("webmap.wasm not present (basemap parse JS)");
+      }
+      memStats.setWasmMemory(null);
+      memStats.setParsePath("js");
       return;
     }
-    const bytes = await res.arrayBuffer();
-    const mem = new WebAssembly.Memory({ initial: 256, maximum: 2048 });
-    const { instance } = await WebAssembly.instantiate(bytes, {
-      env: { memory: mem },
+
+    /* P4.13: decode-and-drop host — no second pyramid in C cache */
+    wasmHost = createWasmHost({
+      log,
+      decodeAndDrop: true,
+      maxTiles: 2,
     });
-    const id = instance.exports.webmap_wasm_build_id_ptr
-      ? new TextDecoder().decode(
-          new Uint8Array(
-            mem.buffer,
-            instance.exports.webmap_wasm_build_id_ptr(),
-            32
-          )
-        )
-      : "(exports ok)";
-    log("WASM loaded: " + id.replace(/\0.*/g, ""));
+    await wasmHost.init("./webmap.wasm");
+    memStats.setWasmMemory(wasmHost.getMemory());
+    memStats.setParsePath("wasm");
+    const hs = wasmHost.heapStats();
+    const modeTag =
+      wasmMode === "on" ? "?wasm=1" : wasmMode === "auto" ? "auto" : wasmMode;
+    log(
+      `WASM basemap parse ON (${modeTag}, decode-and-drop) · heap used ${memStats.formatBytes(hs?.used || 0)}` +
+        ` free ${memStats.formatBytes(hs?.free || 0)}` +
+        ` cap ${memStats.formatBytes(hs?.capacity || 0)}` +
+        ` · linear ${memStats.formatBytes(wasmHost.getMemory()?.buffer?.byteLength || 0)}`
+    );
   } catch (e) {
-    log("WASM load skipped: " + e.message);
+    memStats.setWasmMemory(null);
+    wasmHost = null;
+    memStats.setParsePath("js");
+    log(
+      (wasmMode === "on"
+        ? "WASM tile path failed (?wasm=1); falling back to JS: "
+        : "WASM auto init failed; basemap parse JS: ") + e.message
+    );
   }
 }
 
@@ -1646,11 +1839,6 @@ async function tryWasm() {
 (async () => {
   try {
     await initGpu();
-    fiberLayer = createFiberLayer({
-      device,
-      labelCanvas,
-      log,
-    });
     fiberTrace = createFiberTrace({
       device,
       log,
@@ -1659,8 +1847,62 @@ async function tryWasm() {
       onChange: () => {
         /* dim/highlight updated next frame */
       },
+      memStats,
+    });
+    /* P4.11: schematic layout service (WASM when available; ?schematic=js forces JS) */
+    schematicLayout = createSchematicLayoutService({
+      log,
+      mode: schematicMode,
+    });
+    await schematicLayout.init("./webmap.wasm");
+
+    fiberLayer = createFiberLayer({
+      device,
+      labelCanvas,
+      log,
+      onTrace: (guid, fiber) => {
+        if (!fiberTrace?.enabled) {
+          log("Path index not available for this package");
+          return;
+        }
+        fiberTrace.selectByCable(guid || "", fiber);
+      },
+      // onOpenDiagram omitted — layer opens diagrams_url HTML via diagram index
+      requestPaint: () => {
+        /* paintSymbols runs every frame; magnifier state is read there */
+      },
+      memStats,
+      maxTiles: hostMaxTiles,
+      layoutService: schematicLayout,
+    });
+    weatherLayer = createWeatherLayer({
+      device,
+      log,
+      memStats,
+      enabled: weatherEnabled,
+      opacity: weatherOpacityInit,
+    });
+    dynamicFeed = createDynamicFeed({
+      device,
+      log,
+      memStats,
+    });
+    memStats.setExtraCollector(() => {
+      fiberLayer?.refreshMemStats?.();
+      fiberTrace?.refreshMemStats?.();
+      return {
+        basemap: basemapCache.report(),
+        fiber: fiberLayer?.getMemReport?.() ?? null,
+        path_trace: fiberTrace?.getMemReport?.() ?? null,
+        weather: weatherLayer?.getMemReport?.() ?? null,
+        dynamic: dynamicFeed?.getMemReport?.() ?? null,
+        schematic: schematicLayout?.getMemReport?.() ?? null,
+      };
     });
     setStatus('<span class="ok">WebGPU ready</span> — loading tiles…');
+    /* P4.13: init WASM host before basemap (auto/on); ?wasm=0 skips */
+    memStats.setParsePath("js");
+    await tryWasm();
     const manifest = await loadManifest();
     if (manifest.source?.label) {
       log(
@@ -1689,10 +1931,61 @@ async function tryWasm() {
       );
     }
 
-    await tryWasm();
+    /* P4.7 weather fixture (host paint; independent of edgehost NOTIFY) */
+    if (weatherLayer && weatherEnabled) {
+      try {
+        await weatherLayer.load("./weather/sample_alerts.json");
+      } catch (e) {
+        log("weather load failed: " + (e.message || e));
+      }
+    } else if (!weatherEnabled) {
+      log("weather layer off (?weather=0)");
+    }
+    wireWeatherControls();
+
+    /* P4.9 dynamic map.dynamic feed (fixture default; ?feed=ws:// or ?feed=0) */
+    if (dynamicFeed) {
+      try {
+        await dynamicFeed.start(feedCfg);
+      } catch (e) {
+        log("dynamic feed start failed: " + (e.message || e));
+      }
+    }
+
+    /* Seed viewport tiles after camera settle */
+    await ensureBasemapTiles(selectIdealTileZoom(cam.zoom));
+    if (fiberLayer?.ensureVisibleTiles) {
+      await fiberLayer.ensureVisibleTiles(cam, view, metersPerPixel);
+    }
+
+    fiberLayer?.refreshMemStats?.();
+    fiberTrace?.refreshMemStats?.();
+    const memEl = document.getElementById("mem-hud");
+    memStats.startHud(memEl, 1500);
+    {
+      const s = memStats.snapshot();
+      log(
+        `mem accounted ${memStats.formatBytes(s.accounted_bytes)}` +
+          (s.heap.available
+            ? ` · JS heap ${memStats.formatBytes(s.heap.used)}`
+            : " · JS heap n/a") +
+          " (P4.0 harness — see sidebar Memory)"
+      );
+    }
     log(
-      "demo ready — basemap .wmap · fiber .fmap · path_index · " +
-        "click cable=trace · tap=diagram · Esc=clear · hover magnifier · symbols ≥z" +
+      "demo ready — basemap .wmap" +
+        (wasmHost?.ready ? " (WASM parse)" : " (JS parse)") +
+        " · fiber .fmap · path_index · weather" +
+        (weatherLayer?.enabled
+          ? ` (opacity ${weatherLayer.opacity.toFixed(2)})`
+          : " off") +
+        " · dynamic " +
+        (feedCfg.enabled ? feedCfg.mode : "off") +
+        " · schematic " +
+        (schematicLayout?.hasWasm ? "wasm" : "js") +
+        " · " +
+        "hover magnifier · scroll=zoom glass · hover strand=pair · " +
+        "click fiber=trace · click cable=paths · dbl-click glass=diagram · Esc=clear · z≥" +
         fiberTapZmin
     );
     lastFrameT = performance.now();

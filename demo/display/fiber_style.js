@@ -1,7 +1,10 @@
 /**
  * Fiber map display policy only — widths, radii, min-zooms, draw order.
  * Feature attributes (TIA colors, port counts, cable size) come from data.
+ * Magnifier chrome colors come from glass_tokens.js (P4.8 / ADR-021).
  */
+
+import { GLASS_LENS } from "./glass_tokens.js";
 
 /** Linear interpolate style stops { zoom: value }. */
 export function zoomStops(stops, zoom) {
@@ -120,19 +123,39 @@ export function diagramUrl(spGuid, diagramIndex, diagramsBase) {
 /* ── Hover magnifier (display policy) ──────────────────────────────── */
 
 /** Dwell time before the magnifier opens (ms). */
-export const HOVER_DELAY_MS = 500;
+export const HOVER_DELAY_MS = 420;
 
 /** Extra screen-space pad when hit-testing lines (CSS px). */
 export const LINE_HIT_PAD_PX = 4;
 
 /** Lens radius in CSS px (content area inside the glass rim). */
-export const MAGNIFIER_RADIUS_PX = 138;
+export const MAGNIFIER_RADIUS_PX = 168;
 
 /** Offset of lens center from the feature (CSS px). */
-export const MAGNIFIER_OFFSET_PX = 32;
+export const MAGNIFIER_OFFSET_PX = 40;
 
-/** Max fibers drawn per cable rail in a schematic (hide dark beyond). */
-export const SCHEMATIC_MAX_FIBERS = 24;
+/**
+ * Base pan range at zoom=1 when the pointer sits at the lens rim
+ * (CSS px in schematic space). Scales with in-glass zoom.
+ */
+export const MAGNIFIER_PAN_RANGE_PX = 110;
+
+/** Schematic content scale at zoom=1 (larger world than the glass). */
+export const MAGNIFIER_WORLD_SCALE = 1.35;
+
+/**
+ * In-glass zoom limits (wheel while pointer is in the magnifier).
+ * Min is low enough that large multi-cable / many-fiber SPs (144–288f)
+ * fit entirely in the glass; max still allows strand-level inspection.
+ */
+export const MAGNIFIER_ZOOM_MIN = 0.16;
+export const MAGNIFIER_ZOOM_MAX = 5.5;
+
+/**
+ * Max fibers drawn per cable rail in the magnifier schematic.
+ * Sized for common plant cables (12…288f). Spacing densifies automatically.
+ */
+export const SCHEMATIC_MAX_FIBERS = 288;
 
 /** TIA-598 fiber / tube color order (1-based fiber number → index 0). */
 export const TIA_NAMES = [
@@ -183,16 +206,25 @@ export function tiaFiberIsLight(fiberNum) {
   return i === 5 || i === 8;
 }
 
-/* Magnifier accent colors (schematic + chrome). */
-export const MAG_BG = "rgba(12, 16, 24, 0.94)";
-export const MAG_RIM = "rgba(160, 200, 255, 0.55)";
-export const MAG_RIM_INNER = "rgba(255, 255, 255, 0.12)";
-export const MAG_TEXT = "#e7ecf1";
-export const MAG_MUTED = "#9aa7b5";
-export const MAG_TAP = "#e67e22";
-export const MAG_DROP = "#c0392b";
-export const MAG_DROP_FILL = "rgba(192, 57, 59, 0.12)";
-export const MAG_SPLICE = "#7eb6ff";
-export const MAG_MAINLINE = "#6ab0ff";
-export const MAG_FUSE = "#5dade2";
-export const MAG_HINT = "#6b7785";
+/* Magnifier accent colors — from glass_tokens.js (single palette). */
+export const MAG_BG = GLASS_LENS.bg;
+export const MAG_RIM = GLASS_LENS.rim;
+export const MAG_RIM_INNER = GLASS_LENS.rimInner;
+export const MAG_TEXT = GLASS_LENS.text;
+export const MAG_MUTED = GLASS_LENS.muted;
+export const MAG_TAP = GLASS_LENS.tap;
+export const MAG_DROP = GLASS_LENS.drop;
+export const MAG_DROP_FILL = GLASS_LENS.dropFill;
+export const MAG_SPLICE = GLASS_LENS.splice;
+export const MAG_MAINLINE = GLASS_LENS.mainline;
+export const MAG_FUSE = GLASS_LENS.fuse;
+export const MAG_HINT = GLASS_LENS.hint;
+/** Through-tap (Input → Pass Through) path in magnifier. */
+export const MAG_THROUGH = GLASS_LENS.through;
+export const MAG_THROUGH_GLOW = GLASS_LENS.throughGlow;
+/** Light / source accent on path budget. */
+export const MAG_SOURCE = GLASS_LENS.source;
+/** Path loss severity colors. */
+export const LOSS_OK = "#3dcc7a";
+export const LOSS_WARN = "#e6b84d";
+export const LOSS_CRIT = "#e85d5d";

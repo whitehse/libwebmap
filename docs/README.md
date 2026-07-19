@@ -23,11 +23,16 @@ I/O and WebGPU device management.
   - [formats/fmap.md](formats/fmap.md) — `.fmap` tile bytes (v1–v3)
   - [formats/fiber-design-input.md](formats/fiber-design-input.md) — intermediate SQLite + CRS
   - [formats/path-index.md](formats/path-index.md) — optical path index for trace UI
-  - [formats/weather-package.md](formats/weather-package.md) — weather/wind overlay package (schema)
-- [decisions/](decisions/) — Architecture Decision Records (ADRs 001–017)
-- [designs/](designs/) — Design docs (data-source boundary, path-trace plan)
+  - [formats/weather-package.md](formats/weather-package.md) — weather/wind overlay package (schema + P4.7 host paint)
+- [decisions/](decisions/) — Architecture Decision Records (ADRs 001–018, **020 schematic layout**, **021–023** host UI/weather/feed, 024–026 WASM, …)
+- [designs/](designs/) — Design docs (data boundary, path trace, [optical budget](designs/optical-budget.md))
 - [guides/wasm.md](guides/wasm.md) — freestanding clang WASM (no Emscripten)
 - [guides/oklahoma-tiles.md](guides/oklahoma-tiles.md) — GeoFabrik Shortbread county pipeline
+- [guides/memory-attribution.md](guides/memory-attribution.md) — **P4.0** demo memory harness + baseline protocol
+- [guides/wasm-default-on-gate.md](guides/wasm-default-on-gate.md) — **P4.6** JS vs WASM gate (default remains JS)
+- [guides/glass-ui.md](guides/glass-ui.md) — **P4.8** glass UI tokens (CSS + Canvas)
+- [guides/dynamic-feed.md](guides/dynamic-feed.md) — **P4.9** map.dynamic fixture / WS consumer
+- [guides/schematic-layout.md](guides/schematic-layout.md) — **P4.10** meet-point layout C/WASM blob
 
 ## Quick start
 

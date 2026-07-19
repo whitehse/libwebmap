@@ -1,0 +1,10 @@
+# P4.9 map.dynamic fixture (NOTIFY-shaped). Tulsa-area sample; host-only.
+{"v":1,"op":"upsert","ns":"map.dynamic","key":"feature/fiber/span-demo-1","value":{"id":"span-demo-1","class":"fiber","status":"ok","updated_at":"2026-07-18T12:00:00Z","geom":{"type":"LineString","coordinates":[[-95.99,36.12],[-95.96,36.14],[-95.93,36.15]]}}}
+{"v":1,"op":"upsert","ns":"map.dynamic","key":"feature/fiber/span-demo-1","value":{"id":"span-demo-1","class":"fiber","status":"degraded","updated_at":"2026-07-18T12:00:30Z","geom":{"type":"LineString","coordinates":[[-95.99,36.12],[-95.96,36.14],[-95.93,36.15]]}}}
+{"v":1,"op":"upsert","ns":"map.dynamic","key":"feature/alert/ice-zone-tulsa-sample","value":{"id":"ice-zone-tulsa-sample","class":"alert","status":"degraded","geom_ref":"weather:ice-zone-tulsa-sample","updated_at":"2026-07-18T12:01:00Z"}}
+{"v":1,"op":"upsert","ns":"map.dynamic","key":"feature/fiber/span-demo-1","value":{"id":"span-demo-1","class":"fiber","status":"down","updated_at":"2026-07-18T12:01:30Z","geom":{"type":"LineString","coordinates":[[-95.99,36.12],[-95.96,36.14],[-95.93,36.15]]}}}
+{"v":1,"op":"upsert","ns":"map.dynamic","key":"feature/alert/station-alert-sample","value":{"id":"station-alert-sample","class":"alert","status":"down","updated_at":"2026-07-18T12:02:00Z","geom":{"type":"Point","coordinates":[-95.99,36.15]}}}
+{"v":1,"op":"upsert","ns":"map.dynamic","key":"feature/alert/outage-poly-1","value":{"id":"outage-poly-1","class":"alert","status":"down","updated_at":"2026-07-18T12:02:30Z","geom":{"type":"Polygon","coordinates":[[[-96.02,36.10],[-95.97,36.10],[-95.97,36.13],[-96.02,36.13],[-96.02,36.10]]]}}}
+{"v":1,"op":"remove","ns":"map.dynamic","key":"feature/alert/outage-poly-1"}
+{"v":1,"op":"upsert","ns":"net.core","key":"router/ignore-me","value":{"id":"ignore-me","status":"ok"}}
+{"v":99,"op":"upsert","ns":"map.dynamic","key":"feature/bad-version","value":{"id":"x","status":"ok"}}

@@ -6767,6 +6767,7 @@
       "y": 6464
     }
   ],
+  "splice_detail_url": "./splice_detail/",
   "path_index": "path_index/",
   "path_index_format": 1,
   "path_index_files": {
@@ -6774,6 +6775,5 @@
     "cable_to_paths": "path_index/cable_to_paths.json",
     "paths": "path_index/paths.jsonl"
   },
-  "path_index_sqlite": "path_index.sqlite",
-  "splice_detail_url": "./splice_detail/"
+  "path_index_sqlite": "path_index.sqlite"
 }

@@ -4,107 +4,11 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>libwebmap — WebGPU status map demo</title>
+  <!-- P4.8 glass UI tokens + chrome (docs/guides/glass-ui.md, ADR-021) -->
+  <link rel="stylesheet" href="./display/glass_ui.css" />
   <style>
-    :root {
-      color-scheme: dark;
-      font-family: system-ui, sans-serif;
-      --sidebar-w: 280px;
-      --sidebar-tab: 28px;
-    }
-    body { margin: 0; background: #0b1220; color: #e8eef7; }
-    header { padding: 0.75rem 1rem; background: #121a2b; border-bottom: 1px solid #243049; }
-    header h1 { margin: 0; font-size: 1.1rem; font-weight: 600; }
-    header p { margin: 0.25rem 0 0; opacity: 0.8; font-size: 0.85rem; }
-    #wrap {
-      display: grid;
-      grid-template-columns: 1fr var(--sidebar-w);
-      height: calc(100vh - 72px);
-      transition: grid-template-columns 0.2s ease;
-    }
-    #wrap.sidebar-collapsed {
-      grid-template-columns: 1fr var(--sidebar-tab);
-    }
-    #map { position: relative; min-width: 0; min-height: 0; }
-    #map canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-    #c { background: #0e1626; touch-action: none; }
-    #labels { pointer-events: none; }
-
-    #sidebar {
-      position: relative;
-      display: flex;
-      flex-direction: row;
-      min-width: 0;
-      min-height: 0;
-      border-left: 1px solid #243049;
-      background: #10182a;
-      font-size: 0.85rem;
-      overflow: hidden;
-    }
-    #sidebar-toggle {
-      flex: 0 0 var(--sidebar-tab);
-      width: var(--sidebar-tab);
-      margin: 0;
-      padding: 0;
-      border: none;
-      border-radius: 0;
-      border-right: 1px solid #243049;
-      background: #152038;
-      color: #9ab0d0;
-      cursor: pointer;
-      font-size: 0.95rem;
-      line-height: 1;
-      writing-mode: vertical-rl;
-      text-orientation: mixed;
-      letter-spacing: 0.04em;
-    }
-    #sidebar-toggle:hover { background: #1c2a48; color: #e8eef7; }
-    #sidebar-body {
-      flex: 1 1 auto;
-      min-width: 0;
-      padding: 1rem;
-      overflow: auto;
-      opacity: 1;
-      transition: opacity 0.15s ease;
-    }
-    #wrap.sidebar-collapsed #sidebar-body {
-      opacity: 0;
-      pointer-events: none;
-      padding: 0;
-      overflow: hidden;
-    }
-    #wrap.sidebar-collapsed #sidebar-toggle {
-      border-right: none;
-    }
-
-    aside code, #sidebar code { font-size: 0.8rem; }
-    .ok { color: #2ecc71; } .warn { color: #f1c40f; } .err { color: #e74c3c; }
-    #log {
-      white-space: pre-wrap;
-      font-family: ui-monospace, monospace;
-      font-size: 0.75rem;
-      opacity: 0.9;
-      max-height: 40vh;
-      overflow: auto;
-    }
-    h3 { margin: 1rem 0 0.4rem; font-size: 0.95rem; }
-    h3:first-child { margin-top: 0; }
-
-    #path-list {
-      position: absolute;
-      left: 12px;
-      bottom: 12px;
-      z-index: 5;
-      max-width: min(360px, 90vw);
-      max-height: 40vh;
-      overflow: auto;
-      background: rgba(16, 24, 42, 0.94);
-      border: 1px solid #2a3d5c;
-      border-radius: 8px;
-      padding: 0.5rem 0.65rem;
-      box-shadow: 0 6px 24px rgba(0,0,0,0.35);
-      font-size: 0.8rem;
-    }
-    #path-list[hidden] { display: none !important; }
+    /* Layout ids still used by main.js; colors come from glass tokens. */
+    #path-list.path-list-head-legacy { /* reserved */ }
     .path-list-head {
       display: flex;
       align-items: center;
@@ -112,59 +16,125 @@
       gap: 0.5rem;
       margin-bottom: 0.35rem;
     }
-    .path-clear, .path-item {
+    .path-clear {
       font: inherit;
-      color: #e8eef7;
-      background: #1a2740;
-      border: 1px solid #334a6d;
-      border-radius: 4px;
+      color: var(--glass-text);
+      background: var(--glass-bg-elevated-solid);
+      border: 1px solid var(--glass-border-strong);
+      border-radius: var(--glass-radius-sm);
       cursor: pointer;
+      padding: 0.15rem 0.45rem;
+      font-size: 0.75rem;
     }
-    .path-clear { padding: 0.15rem 0.45rem; font-size: 0.75rem; }
+    .path-clear:hover { background: var(--glass-bg-hover); }
     .path-item {
       display: block;
       width: 100%;
       text-align: left;
       margin: 0.2rem 0;
       padding: 0.35rem 0.45rem;
+      font: inherit;
+      color: var(--glass-text);
+      background: var(--glass-bg-elevated-solid);
+      border: 1px solid var(--glass-border-strong);
+      border-radius: var(--glass-radius-sm);
+      cursor: pointer;
     }
-    .path-item:hover { background: #243656; }
+    .path-item:hover { background: var(--glass-bg-hover); }
     .path-item.path-sel {
-      border-color: #ffc800;
-      background: #2a3018;
+      border-color: var(--glass-accent);
+      background: var(--glass-accent-soft);
     }
-    .path-id { color: #ffc800; font-family: ui-monospace, monospace; }
+    .path-id { color: var(--glass-accent); font-family: var(--glass-mono); }
     .path-meta { opacity: 0.85; }
+    .path-loss { font-family: var(--glass-mono); }
+    .path-item.loss-ok .path-loss { color: var(--glass-status-ok); }
+    .path-item.loss-warn .path-loss { color: #e6b84d; }
+    .path-item.loss-crit .path-loss { color: #e85d5d; }
     .path-list-foot {
       margin-top: 0.35rem;
       opacity: 0.65;
       font-size: 0.72rem;
-      font-family: ui-monospace, monospace;
+      font-family: var(--glass-mono);
+    }
+    .path-budget {
+      margin-top: 0.45rem;
+      padding-top: 0.4rem;
+      border-top: 1px solid var(--glass-border);
+      max-height: 11rem;
+      overflow-y: auto;
+    }
+    .budget-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.5rem;
+      margin-bottom: 0.3rem;
+      font-size: 0.75rem;
+    }
+    .budget-src { color: var(--glass-source); }
+    .budget-total { font-family: var(--glass-mono); font-weight: 700; }
+    .path-budget.loss-ok .budget-total { color: var(--glass-status-ok); }
+    .path-budget.loss-warn .budget-total { color: #e6b84d; }
+    .path-budget.loss-crit .budget-total { color: #e85d5d; }
+    .budget-cols, .budget-hop {
+      display: grid;
+      grid-template-columns: 2.2rem 1fr 2.6rem 2.6rem;
+      gap: 0.2rem;
+      font-size: 0.7rem;
+      align-items: baseline;
+    }
+    .budget-cols {
+      opacity: 0.5;
+      margin-bottom: 0.15rem;
+      font-size: 0.65rem;
+    }
+    .budget-hop { padding: 0.12rem 0; border-bottom: 1px solid var(--glass-border-soft); }
+    .budget-role {
+      font-weight: 700;
+      font-size: 0.62rem;
+      text-transform: uppercase;
+      color: var(--glass-text-muted);
+    }
+    .budget-hop.role-source .budget-role { color: var(--glass-source); }
+    .budget-hop.role-input .budget-role { color: var(--glass-through); }
+    .budget-hop.role-pass_through .budget-role { color: var(--glass-through); }
+    .budget-hop.role-drop .budget-role { color: #e85d5d; }
+    .budget-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .budget-loss, .budget-cum {
+      font-family: var(--glass-mono);
+      text-align: right;
+      opacity: 0.9;
+    }
+    .budget-note {
+      margin-top: 0.3rem;
+      font-size: 0.65rem;
+      opacity: 0.55;
     }
   </style>
 </head>
-<body>
-  <header>
+<body class="glass-app">
+  <header class="glass-header">
     <h1>libwebmap WebGPU demo</h1>
     <p>Rural fiber / electric status map — OSM basemap + fiber design packages. No Emscripten.</p>
   </header>
-  <div id="wrap" class="sidebar-collapsed">
-    <div id="map">
+  <div id="wrap" class="glass-shell sidebar-collapsed">
+    <div id="map" class="glass-map">
       <canvas id="c"></canvas>
       <canvas id="labels"></canvas>
-      <div id="path-list" hidden aria-live="polite"></div>
+      <div id="path-list" class="glass-float glass-float--bottom-left" hidden aria-live="polite"></div>
     </div>
-    <aside id="sidebar" aria-label="Map details">
+    <aside id="sidebar" class="glass-sidebar" aria-label="Map details">
       <button
         type="button"
         id="sidebar-toggle"
+        class="glass-sidebar-toggle"
         aria-expanded="false"
         aria-controls="sidebar-body"
         title="Expand sidebar"
       >Info ›</button>
-      <div id="sidebar-body">
+      <div id="sidebar-body" class="glass-sidebar-body">
         <div id="status">Initializing…</div>
-        <p><strong>Controls</strong>: drag pan · wheel zoom · hover 0.5s magnifier · click cable to trace path · click tap/splice for diagram · Esc clears path</p>
+        <p><strong>Controls</strong>: drag pan · wheel zoom map · hover magnifier (clean geo meet-point) · move inside glass to pan · <strong>scroll inside glass to zoom strands</strong> · hover a color dot to highlight its splice pair · click fiber to path-trace · double-click glass for full diagram · Esc clears path</p>
         <h3>Fiber design</h3>
         <p>Data: <code>fiber_data/*.fmap</code> v3 (+ <code>path_index/</code> · <code>splice_detail/</code>)</p>
         <p>Display: <code>demo/display/</code> (style + symbols + magnifier + path trace)</p>
@@ -172,14 +142,41 @@
           <li>Cables / drops ≥ z10/z12 · taps &amp; splices ≥ z13</li>
           <li>Taps: circle + drop-port digit · splices: hexagon</li>
           <li>Click cable/drop → optical path highlight (needs path_index)</li>
-          <li>Click tap/splice → HTML diagram when installed</li>
+          <li>Magnifier: cables enter from real map directions (N/E/S/W)</li>
+          <li>Click fiber chip in glass → path-trace that strand</li>
+          <li>Tap through-fiber: warm IN→PT path (≠ fuse ×); drops in red</li>
+          <li>Path list: light from start · hop budget + aggregate loss</li>
+          <li>Double-click glass → full HTML diagram when installed</li>
         </ul>
         <p>Diagrams optional: generated <code>splice_diagrams/</code> (CMake target)</p>
         <h3>Basemap</h3>
         <p>Counties: Tulsa, Wagoner, Okmulgee, Creek, Okfuskee, McIntosh, Muskogee, Seminole, Lincoln</p>
         <p>Source: GeoFabrik experimental <code>oklahoma-shortbread-1.0.mbtiles</code></p>
+        <h3>Weather (P4.7)</h3>
+        <p style="margin:0.25rem 0">Fixture package: <code>weather/sample_alerts.json</code> (host paint, ADR-022)</p>
+        <label class="glass-control-row" for="weather-enable">
+          <input type="checkbox" id="weather-enable" checked />
+          Show weather alerts
+        </label>
+        <label class="glass-control-row" for="weather-opacity">
+          Opacity
+          <input type="range" id="weather-opacity" min="0" max="100" value="45" />
+          <code id="weather-opacity-val">0.45</code>
+        </label>
+        <p class="glass-muted" style="margin:0.35rem 0 0">Query: <code>?weather=0</code> off · <code>?weather_opacity=0.3</code> · status colors match <code>webmap_status_rgba</code></p>
+        <h3>Glass UI (P4.8)</h3>
+        <p class="glass-muted" style="margin:0.25rem 0">Tokens: <code>display/glass_ui.css</code> + <code>glass_tokens.js</code>. Guide: <code>docs/guides/glass-ui.md</code></p>
+        <h3>Schematic layout (P4.11)</h3>
+        <p class="glass-muted" style="margin:0.25rem 0">Magnifier meet-point geometry prefers WASM <code>webmap_schematic_layout</code> (ADR-020). Fallback: JS. <code>?schematic=js</code> force JS · <code>?schematic=wasm</code> require WASM.</p>
+        <h3>Dynamic feed (P4.9)</h3>
+        <p class="glass-muted" style="margin:0.25rem 0">Offline <code>map.dynamic</code> JSONL (NOTIFY schema). Production: edgehost WS. ADR-023.</p>
+        <div id="dynamic-feed-hud" class="glass-hud">Starting…</div>
+        <p class="glass-muted" style="margin:0.35rem 0 0"><code>?feed=0</code> off · <code>?feed_interval=400</code> pace fixture · <code>?feed=ws://host/api/v1/stream</code> live</p>
+        <h3>Memory (P4.0)</h3>
+        <div id="mem-hud" class="glass-hud">Loading counters…</div>
+        <p class="glass-muted" style="margin-top:0.35rem">Hide with <code>?mem=0</code>. Cap tiles with <code>?max_tiles=256</code> (default; <code>0</code>=∞). Basemap WASM parse is <strong>opt-in</strong>: <code>?wasm=1</code> (P4.6). Guide: <code>docs/guides/wasm-default-on-gate.md</code></p>
         <h3>Log</h3>
-        <div id="log"></div>
+        <div id="log" class="glass-log"></div>
       </div>
     </aside>
   </div>

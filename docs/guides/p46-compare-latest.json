@@ -1,0 +1,72 @@
+{
+  "v": 2,
+  "kind": "libwebmap_p46_parse_compare",
+  "t": "2026-07-19T00:33:36.087Z",
+  "config": {
+    "dir": "demo/basemap",
+    "wasm": "demo/webmap.wasm",
+    "limit": 12,
+    "tiles": 12,
+    "warmup": 2,
+    "file_bytes": 2194204,
+    "decode_and_drop": true
+  },
+  "js": {
+    "tiles": 12,
+    "errors": 0,
+    "total_ms": 37.63066700000002,
+    "per_tile_ms": {
+      "mean": 2.9140450833333205,
+      "p50": 0.6236490000000003,
+      "p95": 9.073235000000011,
+      "max": 9.073235000000011
+    },
+    "output_payload_bytes": 2186468,
+    "layer_count": 229
+  },
+  "wasm": {
+    "tiles": 12,
+    "errors": 0,
+    "total_ms": 17.927216999999985,
+    "per_tile_ms": {
+      "mean": 1.290702333333338,
+      "p50": 1.3430460000000153,
+      "p95": 1.9415580000000432,
+      "max": 1.9415580000000432
+    },
+    "output_payload_bytes": 2186468,
+    "layer_count": 229,
+    "heap_used": 2667232,
+    "heap_free": 318176,
+    "heap_capacity": 7340032,
+    "linear_memory": 8388608,
+    "over_watermark": 0,
+    "tile_count": 0,
+    "drop_count": 14,
+    "decode_and_drop": true
+  },
+  "ratios": {
+    "total_time_wasm_over_js": 0.4763991294653368,
+    "mean_time_wasm_over_js": 0.4429246275959905,
+    "payload_equal": true
+  },
+  "gate": {
+    "default_on_recommended": true,
+    "reasons": [
+      "decode-and-drop: C tile cache emptied after each extract",
+      "tile_count=0 after sequential decode-and-drop",
+      "heap used 2.54 MiB within budget 3.00 MiB",
+      "linear memory 8.00 MiB within soft budget",
+      "host still copies verts once for line extrusion; no dual C+JS pyramid retention"
+    ],
+    "blockers": [],
+    "notes": [
+      "decode-and-drop: C tile cache emptied after each extract",
+      "tile_count=0 after sequential decode-and-drop",
+      "heap used 2.54 MiB within budget 3.00 MiB",
+      "linear memory 8.00 MiB within soft budget",
+      "host still copies verts once for line extrusion; no dual C+JS pyramid retention"
+    ],
+    "summary": "Default-on recommended: demo uses WASM decode-and-drop by default (auto); ?wasm=0 forces JS."
+  }
+}

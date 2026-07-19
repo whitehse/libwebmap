@@ -154,20 +154,30 @@ fiber/basemap Tier B tools.
 |------|---------|
 | [fixtures/weather/sample_alerts.json](../../fixtures/weather/sample_alerts.json) | One ice polygon (degraded) + one station point (down) |
 
-## Optional host stub
+## Host paint (P4.7 / ADR-022)
 
-A future demo helper may:
+Demo implementation (no C core I/O):
 
-1. `fetch("./weather/sample_alerts.json")`
-2. For each feature, fill `webmap_overlay_desc_t` (or host-side GPU mesh)
-3. Call `webmap_upsert_overlay` / rebuild overlay GPU buffers
+| Path | Role |
+|------|------|
+| [demo/display/weather_layer.js](../../demo/display/weather_layer.js) | Load package → GPU meshes; opacity |
+| [demo/weather/sample_alerts.json](../../demo/weather/sample_alerts.json) | Served fixture (copy of fixtures/) |
 
-No such loader is required for the contract to be useful. Do not block core
-releases on weather UI.
+Usage:
+
+1. `fetch("./weather/sample_alerts.json")` (or any package URL)
+2. Map each feature’s geom + status → host WebGPU mesh (or later
+   `webmap_upsert_overlay` in a C/WASM host)
+3. Draw with shared triangle pipeline; apply **opacity** on vertex alpha
+
+Query params: `?weather=0` disables; `?weather_opacity=0.3` sets alpha.
+
+Raster stubs are not painted in v1 (log only).
 
 ## Related
 
 - [data-packages.md](data-packages.md) — common package versioning  
+- [ADR-022](../decisions/022-weather-package-host-paint.md) — host paint + transparency  
 - [ADR-017](../decisions/017-three-tier-data-boundary.md) — weather as overlay packages  
 - [ADR-014](../decisions/014-plumbing-vs-host-renderer.md) — host owns device / I/O  
 - `include/webmap.h` — `WEBMAP_CLASS_ALERT`, `webmap_status_t`, overlays  

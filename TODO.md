@@ -22,6 +22,7 @@
 ## Medium priority
 
 - [x] Fiber hover magnifier (dwell + schematic + `splice_detail/` JSON)
+- [x] Magnifier rework: geo approach layout, mouse-pan explore, fiber-chip path trace
 - [x] **ADR-017 three-tier data boundary** (sources / packages / display)
 - [x] **Format ownership docs** (`docs/formats/`: packages, fmap, fiber-design-input)
 - [x] **Basemap pipeline** (`tools/basemap_pipeline/` + package manifest fields)
@@ -39,21 +40,34 @@
 - [ ] Integration sketch with netforensics status events
 - [ ] pkg-config + install man page
 - [ ] Fuzz harness for `.wmap` and MVT parsers
-- [ ] Wire WASM exports into demo draw path (currently demo parses `.wmap` in JS; WASM loads for ABI check)
+- [x] Wire WASM exports into demo basemap parse path (`?wasm=1`; style/extrude still JS host)
+- [x] **P4.0 Memory measurement harness** (`demo/display/mem_stats.js` + sidebar HUD + [guides/memory-attribution.md](docs/guides/memory-attribution.md))
+- [x] **P4.2** Tile cache eviction + max_tiles HUD (C LRU + `webmap_tile_eviction`; host `tile_cache.js` lazy + `?max_tiles=`)
+- [x] **P4.3** Freestanding WASM free-list reclaim (+ watermark reload safety; ADR-025; `webmap_wasm_heap` ctest)
+- [x] **P4.4** WASM host contract (ABI pack export, flat `get_layer`, staging; ADR-024)
+- [x] **P4.5** Demo `?wasm=1` basemap path (`demo/display/wasm_host.js`)
+- [x] **P4.6** Compare JS vs WASM parse; **default remains JS** (ADR-026; `tools/compare_wasm_parse.mjs`)
+- [x] **P4.7** Weather package host paint + opacity (`demo/display/weather_layer.js`, ADR-022, fixture under `demo/weather/`)
+- [x] **P4.8** Glass UI tokens + CSS (`demo/display/glass_ui.css`, `glass_tokens.js`, ADR-021, [guides/glass-ui.md](docs/guides/glass-ui.md))
+- [x] **P4.9** Dynamic feed offline + optional WS (`demo/display/dynamic_feed.js`, ADR-023, fixture JSONL, [guides/dynamic-feed.md](docs/guides/dynamic-feed.md))
+- [x] **P4.10** Schematic layout WASM/C export (`webmap_schematic_layout`, ADR-020, [guides/schematic-layout.md](docs/guides/schematic-layout.md))
+- [x] **P4.11** Magnifier consumes layout export (`createSchematicLayoutService`, `?schematic=`, precomputed paint path)
+- [x] **P4.12** Optional WebGPU glass lens (`?glass_gpu=1`, `glass_lens_gpu.js`, ADR-027)
+- [x] **P4.13** WASM default auto + decode-and-drop (`webmap_drop_tile`, `?wasm=0` opt-out, gate green)
 
 ## Low priority
 
 - [ ] Pitch/bearing matrices for non-nadir views
 - [ ] Multiple overlay GPU layers split by feature_class
 - [ ] Shared customer join helper API
-- [ ] Real free-list malloc for long-lived WASM sessions
+- [x] Real free-list malloc for long-lived WASM sessions (P4.3 / ADR-025)
 
 ## Testing gaps
 
 - [x] Fixture Oklahoma Tulsa tile decode (`webmap_fixture_ok`)
 - [x] Frustum multi-tile coverage (`webmap_frustum`)
 - [x] Polygon index count (`webmap_polygon`)
-- [ ] Eviction path under `max_tiles`
+- [x] Eviction path under `max_tiles` (`tests/test_tile_eviction.c`)
 - [ ] Queue overflow under tiny `event_queue_size`
 - [ ] Malformed MVT / truncated `.wmap` rejection cases
 - [ ] Valgrind clean on all tests

@@ -53,6 +53,7 @@ typedef struct {
     int              used;
     layer_slot_t    *layers;
     size_t           n_layers;
+    uint64_t         lru_stamp; /* higher = more recently used (P4.2) */
 } tile_slot_t;
 
 typedef struct {
@@ -76,6 +77,7 @@ struct webmap_ctx {
     size_t max_tiles;
     tile_slot_t *tiles;
     size_t tile_count;
+    uint64_t lru_clock; /* monotonic stamp for tile LRU eviction */
 
     size_t max_overlays;
     overlay_slot_t *overlays;
@@ -710,26 +712,48 @@ size_t webmap_wmap_encode(webmap_tile_id_t id, const webmap_gpu_layer_t *layers,
     return off;
 }
 
+/** Touch LRU stamp (call when tile is loaded or layers are read). */
+static void touch_tile_lru(struct webmap_ctx *c, tile_slot_t *slot)
+{
+    if (!c || !slot || !slot->used) {
+        return;
+    }
+    c->lru_clock++;
+    if (c->lru_clock == 0) {
+        /* wrap: re-normalize stamps (rare) */
+        c->lru_clock = 1;
+    }
+    slot->lru_stamp = c->lru_clock;
+}
+
 static tile_slot_t *alloc_tile_slot(struct webmap_ctx *c)
 {
     size_t i;
+    size_t victim = (size_t)-1;
+    uint64_t best;
+
     for (i = 0; i < c->max_tiles; i++) {
         if (!c->tiles[i].used) {
             return &c->tiles[i];
         }
     }
-    /* Evict first used (simple FIFO-ish). */
+    /* Evict least-recently-used used slot (ADR-008 / P4.2). */
+    best = ~(uint64_t)0;
     for (i = 0; i < c->max_tiles; i++) {
-        if (c->tiles[i].used) {
-            webmap_event_t ev;
-            memset(&ev, 0, sizeof(ev));
-            ev.type = WEBMAP_EVENT_TILE_EVICTED;
-            ev.tile = c->tiles[i].id;
-            emit_event(c, &ev);
-            free_tile_slot(&c->tiles[i]);
-            c->tile_count--;
-            return &c->tiles[i];
+        if (c->tiles[i].used && c->tiles[i].lru_stamp < best) {
+            best = c->tiles[i].lru_stamp;
+            victim = i;
         }
+    }
+    if (victim != (size_t)-1) {
+        webmap_event_t ev;
+        memset(&ev, 0, sizeof(ev));
+        ev.type = WEBMAP_EVENT_TILE_EVICTED;
+        ev.tile = c->tiles[victim].id;
+        emit_event(c, &ev);
+        free_tile_slot(&c->tiles[victim]);
+        c->tile_count--;
+        return &c->tiles[victim];
     }
     return NULL;
 }
@@ -840,9 +864,31 @@ int webmap_load_wmap_tile(webmap_ctx_t *ctx, const uint8_t *data, size_t len)
     }
 
     ctx->tile_count++;
+    touch_tile_lru(ctx, slot);
     memset(&ev, 0, sizeof(ev));
     ev.type = WEBMAP_EVENT_TILE_LOADED;
     ev.tile = id;
+    emit_event(ctx, &ev);
+    return 0;
+}
+
+int webmap_drop_tile(webmap_ctx_t *ctx, webmap_tile_id_t id)
+{
+    tile_slot_t *slot;
+    webmap_event_t ev;
+
+    if (!ctx) {
+        return -1;
+    }
+    slot = find_tile(ctx, id);
+    if (!slot) {
+        return 1;
+    }
+    memset(&ev, 0, sizeof(ev));
+    ev.type = WEBMAP_EVENT_TILE_EVICTED;
+    ev.tile = id;
+    free_tile_slot(slot);
+    ctx->tile_count--;
     emit_event(ctx, &ev);
     return 0;
 }
@@ -865,6 +911,8 @@ size_t webmap_get_tile_layers(const webmap_ctx_t *ctx, webmap_tile_id_t id,
     if (!slot) {
         return 0;
     }
+    /* Non-const touch for LRU — get_tile_layers is a cache use. */
+    touch_tile_lru((struct webmap_ctx *)ctx, slot);
     n = slot->n_layers < max_layers ? slot->n_layers : max_layers;
     for (i = 0; i < n; i++) {
         out[i] = slot->layers[i].meta;

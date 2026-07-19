@@ -151,6 +151,7 @@ No triangle fans, no screen-space radii.
 | `fiber_fmap.js` | Decode `.fmap` → JS objects |
 | `fiber_schematic.js` | Magnifier schematic drawing |
 | `fiber_magnifier.js` | Hover delay, detail cache, glass lens |
+| `schematic_layout.js` | P4.11 WASM/JS meet-point layout service (ADR-020) |
 | `fiber_layer.js` | WebGPU lines; Canvas symbols; pick + hover + click |
 
 | Symbol | Meaning |
@@ -162,19 +163,55 @@ No triangle fans, no screen-space radii.
 
 ## Compact splice detail (`splice_detail/`)
 
-One JSON object per splicepoint GUID (schema `v: 1`):
+One JSON object per splicepoint GUID (schema **`v: 2`**; `v: 1` still loads):
 
 | Field | Content |
 |-------|---------|
 | `kind` | `tap` or `splice` |
 | `station_id` | Optional field id |
 | `tap` | name, ports, **loss_db**, tube/strand colors |
-| `cables[]` | guid, size, `is_drop` |
+| `cables[]` | guid, size, `is_drop`, optional **`approach_deg`** / **`approach`** |
 | `links[]` | `ingress` / `egress` / `drop` / `fuse` / `equip` (+ fiber endpoints, **loss_db**) |
+
+**`approach_deg`** (0=north, 90=east) is the geographic direction of the cable
+plant as it leaves the splicepoint. The hover magnifier places cable rails on
+that side of the enclosure so a northbound span enters from the **top** of the
+glass, an eastbound span from the **right**, etc. When the field is missing,
+the demo estimates bearings from nearby `.fmap` geometry at runtime.
 
 Lazy-fetched as `{fiber_data base}/splice_detail/<guid>.json`. Manifest
 `splice_detail_url` is relative to the fiber package (e.g. `./splice_detail/`).
 Directory is large/regenerable and typically gitignored.
+
+### Magnifier UX (office / tech navigation)
+
+Clean exploratory glass (not a splicer sheet). Cable approaches snap to
+**45° / 90°** (N / NE / E / …). Strand color dots sit on each span; fuse pairs
+are drawn as orthogonal midlines with a small × at the splice.
+
+| Action | Result |
+|--------|--------|
+| Hover dwell on tap/splice | Geo-oriented meet-point schematic in the glass |
+| Move pointer **inside** the glass | Viewport pans over a larger schematic world |
+| **Scroll** inside the glass | Zoom in/out on strands (map zoom is unchanged) |
+| Hover a **strand color dot** | Highlight that strand **and its paired peer** on the other span |
+| Click a **fiber chip** | Path-trace that strand (`path_index`) |
+| Click a **cable hub** | Path list for that cable GUID |
+| Double-click glass (or Alt-click) | Full HTML splice diagram (splicer sheet) when installed |
+
+The full HTML diagram remains the field splicer view; the magnifier is for
+following connectivity through a large plant without leaving the map.
+
+### Light direction & optical budget
+
+Path walks start at the **source** (feeder / OLT side). Selected paths show a
+hop budget (equipment `split_db`) and total `total_loss_db`. Distance
+attenuation is not applied yet — see
+[optical-budget.md](../designs/optical-budget.md).
+
+At taps, the magnifier draws the **through** fiber (Input → Pass Through) as a
+warm path with arrows, separate from cable↔cable fuse marks (×). Drop legs use
+the catalog drop loss.
 
 ## Tier A note (CrescentLink example)
 

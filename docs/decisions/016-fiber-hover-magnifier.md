@@ -22,15 +22,24 @@ Strand-level connectivity already lives in `fiber_design.sqlite`
 
 ## Decision
 
-1. **Host-only interaction** in `demo/display/`: dwell (~500 ms) → Canvas2D
-   magnifying-glass lens over the feature; click still opens the full diagram.
+1. **Host-only interaction** in `demo/display/`: dwell → Canvas2D magnifying-
+   glass lens over the feature. The glass is an **exploratory meet-point view**
+   for techs/office staff (not a splicer sheet):
+   - Cables are laid out by **geographic approach** snapped to **45° / 90°**
+     (`approach_deg`: 0=N, 90=E), from splice_detail v2 and/or `.fmap` geometry.
+   - Pointer motion **inside** the lens pans a larger schematic world; **wheel
+     zooms the glass** (not the map) so individual strands can be inspected.
+   - Hover a strand color dot → highlight that fiber **and its fuse-paired peer**
+     on the other span (orthogonal splice bridge).
+   - Click a fiber chip → **path-trace** that strand via `path_index`; double-
+     click / Alt-click opens the full HTML diagram for splicers.
 2. **Compact per-SP JSON** under `fiber_data/splice_detail/<guid>.json`,
    produced by `tools/export_splice_detail.py` from `fiber_design.sqlite`.
 3. **Lazy fetch + cache** of detail when a tap/splice magnifier opens; fmap-only
    content (ports, colors, cable size) always works if detail is missing.
 4. **Drop vs mainline** is a first-class visual distinction in schematics
    (dashed / warmer accents for drops).
-5. No change to libwebmap C/WASM public API or `.fmap` v2 layout for v1.
+5. No change to libwebmap C/WASM public API or `.fmap` layout for this ADR.
 
 ## Consequences
 

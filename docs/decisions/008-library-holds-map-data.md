@@ -22,9 +22,11 @@ the active session:
 - Basemap tiles in a bounded in-memory cache (`max_tiles`)
 - Dynamic overlays up to `max_overlays`
 
-Eviction is explicit (capacity pressure emits `TILE_EVICTED`). Hosts should
-preconvert and load the service-area basemap rather than relying solely on
-on-demand MVT parse in the hot path.
+Eviction is explicit (capacity pressure emits `TILE_EVICTED`). The victim is the
+**least-recently-used** tile (`lru_stamp` updated on load and
+`webmap_get_tile_layers`; P4.2). Hosts should preconvert basemap to `.wmap` and
+may load on demand into a host-side LRU capped by the same `max_tiles` policy
+(see `docs/guides/memory-attribution.md`).
 
 ## Consequences
 
