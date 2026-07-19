@@ -22,17 +22,20 @@ Strand-level connectivity already lives in `fiber_design.sqlite`
 
 ## Decision
 
-1. **Host-only interaction** in `demo/display/`: dwell → Canvas2D magnifying-
-   glass lens over the feature. The glass is an **exploratory meet-point view**
-   for techs/office staff (not a splicer sheet):
-   - Cables are laid out by **geographic approach** snapped to **45° / 90°**
-     (`approach_deg`: 0=N, 90=E), from splice_detail v2 and/or `.fmap` geometry.
-   - Pointer motion **inside** the lens pans a larger schematic world; **wheel
-     zooms the glass** (not the map) so individual strands can be inspected.
-   - Hover a strand color dot → highlight that fiber **and its fuse-paired peer**
-     on the other span (orthogonal splice bridge).
+1. **Host-only interaction** in `demo/display/`: **click/tap** a splice or tap
+   opens a Canvas2D magnifying-glass lens centered on that feature. The glass
+   is an **exploratory meet-point view** for techs/office staff (not a splicer
+   sheet):
+   - Cables are laid out by **true geographic approach** (`approach_deg`: 0=N,
+     90=E — not snapped to 45°/90°), from splice_detail v2 and/or `.fmap`
+     geometry.
+   - **Wheel / pinch** zooms the schematic world under the glass; drag pans in
+     **inspect** mode. **Long-press** (or Space) toggles **navigate** mode so
+     the glass focus can be dragged along the plant and adopt nearby SPs.
+   - Highlight a strand color dot → that fiber **and its fuse-paired peer** on
+     the other span (orthogonal splice bridge).
    - Click a fiber chip → **path-trace** that strand via `path_index`; double-
-     click / Alt-click opens the full HTML diagram for splicers.
+     click / long-press SP / Alt-click opens the full HTML diagram for splicers.
 2. **Compact per-SP JSON** under `fiber_data/splice_detail/<guid>.json`,
    produced by `tools/export_splice_detail.py` from `fiber_design.sqlite`.
 3. **Lazy fetch + cache** of detail when a tap/splice magnifier opens; fmap-only

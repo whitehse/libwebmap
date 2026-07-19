@@ -110,10 +110,40 @@ static void test_minimal_json(void)
     {
         const webmap_schematic_cable_t *cabs =
             (const webmap_schematic_cable_t *)(out + sizeof(*hdr));
-        expect(cabs[0].approach_deg == 90.f, "cable0 snap E");
-        expect(cabs[1].approach_deg == 270.f, "cable1 snap W");
+        expect(cabs[0].approach_deg == 90.f, "cable0 true E");
+        expect(cabs[1].approach_deg == 270.f, "cable1 true W");
         expect(cabs[0].x > 0.f, "E hub +x");
         expect(cabs[1].x < 0.f, "W hub −x");
+    }
+}
+
+static void test_true_approach_angle(void)
+{
+    /* 32° must not snap to 45° — glass should match plant bearing. */
+    static const char *json =
+        "{"
+        "\"v\":2,"
+        "\"kind\":\"splice\","
+        "\"cables\":["
+        "{\"guid\":\"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\",\"size\":12,"
+        "\"is_drop\":false,\"approach_deg\":32},"
+        "{\"guid\":\"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb\",\"size\":12,"
+        "\"is_drop\":false,\"approach_deg\":200}"
+        "],"
+        "\"links\":[]"
+        "}";
+    uint8_t out[8192];
+    size_t n = webmap_schematic_layout((const uint8_t *)json, strlen(json), 0.f,
+                                       0.f, 100.f, out, sizeof(out));
+    const webmap_schematic_header_t *hdr =
+        (const webmap_schematic_header_t *)out;
+    expect(n > 0, "true-angle layout bytes");
+    expect(hdr->n_cables == 2, "2 cables at true angles");
+    {
+        const webmap_schematic_cable_t *cabs =
+            (const webmap_schematic_cable_t *)(out + sizeof(*hdr));
+        expect(near_f(cabs[0].approach_deg, 32.f, 0.05f), "cable0 stays 32°");
+        expect(near_f(cabs[1].approach_deg, 200.f, 0.05f), "cable1 stays 200°");
     }
 }
 
@@ -157,6 +187,7 @@ int main(void)
 {
     test_snap_unit();
     test_minimal_json();
+    test_true_approach_angle();
     test_fixture();
     test_bad();
     if (fails) {

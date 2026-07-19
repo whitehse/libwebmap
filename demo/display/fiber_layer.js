@@ -3,8 +3,9 @@
  * and Canvas2D symbols (tap circles + non-tap splice hexagons).
  *
  * Data stays table-like (cables / drops / taps / splices).
- * Style lives in fiber_style.js. Click opens splice diagrams.
- * Hover (after dwell) opens a magnifying-glass detail lens.
+ * Style lives in fiber_style.js.
+ * Single-click on tap/splice opens the meet-point glass; double-click / long-
+ * press opens the full HTML splice diagram.
  */
 
 import {
@@ -314,13 +315,24 @@ export function createFiberLayer(opts) {
     return out;
   }
 
+  function approachLabelFromDeg(deg) {
+    const d = ((Number(deg) % 360) + 360) % 360;
+    const snapped = (Math.round(d / 45) * 45) % 360;
+    let ad = Math.abs(d - snapped);
+    if (ad > 180) ad = 360 - ad;
+    if (ad < 3) {
+      const labels = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+      return labels[Math.round(d / 45) % 8];
+    }
+    return `${Math.round(d)}°`;
+  }
+
   function enrichDetail(hit, detail) {
     if (!detail || !detail.cables) return detail;
     const need = detail.cables.some((c) => c.approach_deg == null);
     if (!need && detail.cables.every((c) => c.approach != null)) return detail;
     const map = approachesNear(hit.mx, hit.my);
     if (!map.size) return detail;
-    const labels = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
     const cables = detail.cables.map((c) => {
       if (c.approach_deg != null) return c;
       const g = String(c.guid || "").toLowerCase();
@@ -335,14 +347,62 @@ export function createFiberLayer(opts) {
         }
       }
       if (deg == null) return c;
-      const i = Math.round((((deg % 360) + 360) % 360) / 45) % 8;
       return {
         ...c,
         approach_deg: deg,
-        approach: labels[i],
+        approach: approachLabelFromDeg(deg),
       };
     });
     return { ...detail, cables };
+  }
+
+  /**
+   * Nearest tap/splice to a mercator point (for glass navigate mode).
+   * @param {number} mx
+   * @param {number} my
+   * @param {number} [maxDistM=80]
+   */
+  function pickNearestSp(mx, my, maxDistM = 80) {
+    if (mx == null || my == null) return null;
+    const maxD2 = maxDistM * maxDistM;
+    let best = null;
+    let bestD2 = Infinity;
+    for (const taps of tileTaps.values()) {
+      for (const t of taps) {
+        const dx = t.mx - mx;
+        const dy = t.my - my;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < bestD2 && d2 <= maxD2) {
+          bestD2 = d2;
+          best = {
+            kind: "tap",
+            sp_guid: t.sp_guid || "",
+            ports: t.ports,
+            strand: t.strand,
+            tube: t.tube,
+            mx: t.mx,
+            my: t.my,
+          };
+        }
+      }
+    }
+    for (const splices of tileSplices.values()) {
+      for (const s of splices) {
+        const dx = s.mx - mx;
+        const dy = s.my - my;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < bestD2 && d2 <= maxD2) {
+          bestD2 = d2;
+          best = {
+            kind: "splice",
+            sp_guid: s.sp_guid || "",
+            mx: s.mx,
+            my: s.my,
+          };
+        }
+      }
+    }
+    return best;
   }
 
   const magnifier = createFiberMagnifier({
@@ -363,6 +423,7 @@ export function createFiberLayer(opts) {
     },
     memStats,
     layoutService,
+    pickNearestSp,
   });
 
   function createMesh(vertBuf, indices, indexCount, meta) {
@@ -788,6 +849,32 @@ export function createFiberLayer(opts) {
     const w = labelCanvas.width;
     const h = labelCanvas.height;
     const magChrome = paintOpts.magnifierChrome || "canvas";
+    const mpp = metersPerPixelFn(cam.zoom);
+    const [cx, cy] = lonLatToMerc(cam.lon, cam.lat);
+    const sx = 1 / (mpp * (view.w / 2));
+    const sy = 1 / (mpp * (view.h / 2));
+    const dpr = view.dpr || 1;
+
+    function toScreen(mx, my) {
+      const ndcX = (mx - cx) * sx;
+      const ndcY = (my - cy) * sy;
+      return [(ndcX * 0.5 + 0.5) * w, (-ndcY * 0.5 + 0.5) * h];
+    }
+
+    // Always refresh glass map projection (even when fiber symbols are off)
+    magnifier.setProjection({
+      toScreenCss: (mx, my) => {
+        const [px, py] = toScreen(mx, my);
+        return [px / dpr, py / dpr];
+      },
+      screenToMerc: (cssX, cssY) => {
+        const ndcX = (cssX / (view.w || 1)) * 2 - 1;
+        const ndcY = 1 - (cssY / (view.h || 1)) * 2;
+        return [cx + ndcX / sx, cy + ndcY / sy];
+      },
+      view,
+    });
+
     if (!show) {
       magnifier.paint(labelCtx, view, { chrome: magChrome });
       return;
@@ -801,11 +888,6 @@ export function createFiberLayer(opts) {
       magnifier.paint(labelCtx, view, { chrome: magChrome });
       return;
     }
-    const mpp = metersPerPixelFn(cam.zoom);
-    const [cx, cy] = lonLatToMerc(cam.lon, cam.lat);
-    const sx = 1 / (mpp * (view.w / 2));
-    const sy = 1 / (mpp * (view.h / 2));
-    const dpr = view.dpr || 1;
 
     const rTapPx = styleTapRadiusPx(cam.zoom);
     const rTap = rTapPx * dpr;
@@ -823,12 +905,6 @@ export function createFiberLayer(opts) {
     labelCtx.textBaseline = "middle";
     labelCtx.lineJoin = "round";
     labelCtx.lineCap = "round";
-
-    function toScreen(mx, my) {
-      const ndcX = (mx - cx) * sx;
-      const ndcY = (my - cy) * sy;
-      return [(ndcX * 0.5 + 0.5) * w, (-ndcY * 0.5 + 0.5) * h];
-    }
 
     // Splices under taps (taps drawn later on top)
     if (showSplices) {
@@ -1075,39 +1151,87 @@ export function createFiberLayer(opts) {
     return { kind: p.kind, sp_guid: p.sp_guid, url };
   }
 
-  /** Open splice diagram for a hit; returns true if opened. */
+  /**
+   * Open full HTML splice diagram for a SP guid.
+   * @returns {boolean}
+   */
+  function openDiagram(spGuid) {
+    if (!spGuid) return false;
+    if (typeof onOpenDiagram === "function") {
+      onOpenDiagram(spGuid);
+      return true;
+    }
+    const url = diagramUrl(spGuid, diagramIndex, diagramsBase);
+    if (!url) return false;
+    window.open(url, "_blank", "noopener,noreferrer");
+    log(`open diagram ${spGuid.slice(0, 8)}…`);
+    return true;
+  }
+
+  /**
+   * Click handling:
+   *  - Inside glass → fiber trace / double-click diagram
+   *  - Tap/splice, detail≥2 or forceDiagram → full HTML diagram
+   *  - Tap/splice single click → open meet-point glass
+   * @returns {boolean} true if consumed
+   */
   function handleClick(cssX, cssY, view, ev = {}) {
-    // Magnifier interaction first (fiber trace / explore)
     if (magnifier.isOpen && magnifier.pointInLens(cssX, cssY, view)) {
       return magnifier.onClick(cssX, cssY, view, {
         altKey: !!ev.altKey,
         detail: ev.detail || 1,
       });
     }
-    const hit = hitTest(cssX, cssY, view);
-    if (!hit) return false;
-    window.open(hit.url, "_blank", "noopener,noreferrer");
-    log(`open ${hit.kind} diagram ${hit.sp_guid.slice(0, 8)}…`);
-    return true;
+
+    const p = pick(cssX, cssY, view, lastPickCam, lastPickMppFn);
+    if (!p || (p.kind !== "tap" && p.kind !== "splice")) {
+      // Click empty map (or non-SP): close glass
+      if (magnifier.isOpen && !ev.keepGlass) {
+        magnifier.cancel();
+        return true;
+      }
+      return false;
+    }
+
+    const forceDiagram =
+      !!ev.forceDiagram ||
+      !!ev.altKey ||
+      (ev.detail || 1) >= 2;
+
+    if (forceDiagram) {
+      if (p.sp_guid) return openDiagram(p.sp_guid);
+      return false;
+    }
+
+    // Single click → meet-point glass at true plant bearings
+    return magnifier.open(
+      {
+        ...p,
+        screenCssX: cssX,
+        screenCssY: cssY,
+      },
+      view
+    );
   }
 
   /**
-   * Hover handling. Returns true if pointer is over a pickable feature
-   * or the open magnifier lens (for cursor style).
+   * Pointer over map: cursor style + inspect chip highlight. Does not open glass.
+   * @returns {boolean} true if pointer is over a pickable feature or the lens
    */
-  function handleHover(cssX, cssY, view, cam, metersPerPixelFn, dragging) {
-    if (dragging || !show) {
-      magnifier.onPointer(null, cssX, cssY, view, true);
-      return false;
-    }
-    // While exploring the lens, keep sticky without re-picking map features
-    if (magnifier.isOpen && magnifier.pointInLens(cssX, cssY, view)) {
-      magnifier.onPointer(null, cssX, cssY, view, false);
-      return true;
+  function handlePointerMove(cssX, cssY, view, cam, metersPerPixelFn) {
+    if (!show) return false;
+    if (magnifier.isOpen) {
+      if (magnifier.onPointerMove(cssX, cssY, view)) return true;
+      if (magnifier.pointInLens(cssX, cssY, view)) return true;
     }
     const hit = pick(cssX, cssY, view, cam, metersPerPixelFn);
-    magnifier.onPointer(hit, cssX, cssY, view, false);
-    return !!hit || magnifier.isOpen;
+    return !!hit;
+  }
+
+  /** @deprecated use handlePointerMove */
+  function handleHover(cssX, cssY, view, cam, metersPerPixelFn, dragging) {
+    if (dragging) return false;
+    return handlePointerMove(cssX, cssY, view, cam, metersPerPixelFn);
   }
 
   /**
@@ -1119,8 +1243,47 @@ export function createFiberLayer(opts) {
     return magnifier.onWheel(cssX, cssY, view, deltaY);
   }
 
+  function cancelGlass() {
+    magnifier.cancel();
+  }
+
+  /** @deprecated use cancelGlass */
   function cancelHover() {
     magnifier.cancel();
+  }
+
+  function openGlass(hit, view) {
+    return magnifier.open(hit, view);
+  }
+
+  function glassPointerDown(cssX, cssY, view) {
+    return magnifier.isOpen && magnifier.onPointerDown(cssX, cssY, view);
+  }
+
+  function glassPointerUp(cssX, cssY, view) {
+    return magnifier.isOpen && magnifier.onPointerUp(cssX, cssY, view);
+  }
+
+  function glassToggleMode() {
+    if (!magnifier.isOpen) return false;
+    magnifier.toggleMode();
+    return true;
+  }
+
+  function glassMode() {
+    return magnifier.isOpen ? magnifier.mode : null;
+  }
+
+  function glassPinchStart(dist, mx, my, view) {
+    return magnifier.isOpen && magnifier.onPinchStart(dist, mx, my, view);
+  }
+
+  function glassPinchMove(dist, mx, my, view) {
+    return magnifier.isOpen && magnifier.onPinchMove(dist, mx, my, view);
+  }
+
+  function glassPinchEnd() {
+    if (magnifier.isOpen) magnifier.onPinchEnd();
   }
 
   function halfWidthForDraw(g, cam, mpp) {
@@ -1138,10 +1301,22 @@ export function createFiberLayer(opts) {
     selectFiberTileZoom,
     hitTest,
     pick,
+    pickNearestSp,
     handleClick,
     handleHover,
+    handlePointerMove,
     handleWheel,
     cancelHover,
+    cancelGlass,
+    openGlass,
+    openDiagram,
+    glassPointerDown,
+    glassPointerUp,
+    glassToggleMode,
+    glassMode,
+    glassPinchStart,
+    glassPinchMove,
+    glassPinchEnd,
     refreshMemStats,
     getMemReport,
     ensureVisibleTiles,

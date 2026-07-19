@@ -174,10 +174,11 @@ One JSON object per splicepoint GUID (schema **`v: 2`**; `v: 1` still loads):
 | `links[]` | `ingress` / `egress` / `drop` / `fuse` / `equip` (+ fiber endpoints, **loss_db**) |
 
 **`approach_deg`** (0=north, 90=east) is the geographic direction of the cable
-plant as it leaves the splicepoint. The hover magnifier places cable rails on
-that side of the enclosure so a northbound span enters from the **top** of the
-glass, an eastbound span from the **right**, etc. When the field is missing,
-the demo estimates bearings from nearby `.fmap` geometry at runtime.
+plant as it leaves the splicepoint. The magnifier places cable rails at that
+**exact bearing** (e.g. 32° enters at 32°, not snapped to 45°). A northbound
+span enters from the **top** of the glass, an eastbound span from the
+**right**, etc. When the field is missing, the demo estimates bearings from
+nearby `.fmap` geometry at runtime.
 
 Lazy-fetched as `{fiber_data base}/splice_detail/<guid>.json`. Manifest
 `splice_detail_url` is relative to the fiber package (e.g. `./splice_detail/`).
@@ -185,19 +186,22 @@ Directory is large/regenerable and typically gitignored.
 
 ### Magnifier UX (office / tech navigation)
 
-Clean exploratory glass (not a splicer sheet). Cable approaches snap to
-**45° / 90°** (N / NE / E / …). Strand color dots sit on each span; fuse pairs
-are drawn as orthogonal midlines with a small × at the splice.
+Clean exploratory glass (not a splicer sheet). Cable / drop approaches use
+**true geographic bearings**. Strand color dots sit on each span; fuse pairs
+are drawn as orthogonal midlines with a small × at the splice. The glass is
+centered on a map focus point so it feels like a movable map lens.
 
 | Action | Result |
 |--------|--------|
-| Hover dwell on tap/splice | Geo-oriented meet-point schematic in the glass |
-| Move pointer **inside** the glass | Viewport pans over a larger schematic world |
-| **Scroll** inside the glass | Zoom in/out on strands (map zoom is unchanged) |
-| Hover a **strand color dot** | Highlight that strand **and its paired peer** on the other span |
-| Click a **fiber chip** | Path-trace that strand (`path_index`) |
+| **Click / tap** splice or tap | Open geo-oriented meet-point glass at that SP |
+| **Double-click** SP (desktop) or **long-press** SP (mobile) | Full HTML splice diagram (splicer sheet) |
+| **Scroll / pinch** inside the glass | Zoom in/out on the schematic world (map zoom unchanged) |
+| **Drag** in inspect mode | Pan the schematic world under the glass |
+| **Long-press** inside glass (or hold **Space**) | Toggle **navigate** mode — drag moves the glass along the plant |
+| Long-press again (or release Space) | Back to **inspect** (strand pick / zoom) |
+| Tap / click a **fiber chip** | Path-trace that strand (`path_index`) + pair highlight |
 | Click a **cable hub** | Path list for that cable GUID |
-| Double-click glass (or Alt-click) | Full HTML splice diagram (splicer sheet) when installed |
+| Double-click glass (or Alt-click) / Esc | Diagram from glass / close glass |
 
 The full HTML diagram remains the field splicer view; the magnifier is for
 following connectivity through a large plant without leaving the map.

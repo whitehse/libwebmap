@@ -125,7 +125,7 @@ token colors. Schematic content stays Canvas2D.
 python3 -m http.server -d build/demo 8765
 
 # experiment: GPU lens chrome under the magnifier schematic
-# open http://127.0.0.1:8765/?glass_gpu=1  and hover a tap/splice
+# open http://127.0.0.1:8765/?glass_gpu=1  and click a tap/splice
 ```
 
 Status bar shows **`glass:gpu`** when the flag is on. See

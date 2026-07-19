@@ -778,7 +778,6 @@ size_t webmap_schematic_layout(const uint8_t *json, size_t json_len, float cx,
     uint32_t n_cables = 0;
     uint32_t n_fibers = 0;
     uint32_t n_fuses = 0;
-    int used_spoke[8];
     uint32_t i;
     int max_fib = 0;
     float slot = 12.f;
@@ -799,48 +798,75 @@ size_t webmap_schematic_layout(const uint8_t *json, size_t json_len, float cx,
     }
     rail_r = radius * 0.58f;
 
-    memset(used_spoke, 0, sizeof(used_spoke));
     memset(cables, 0, sizeof(cables));
     n_cables = detail.n_cables;
     if (n_cables > WEBMAP_SCHEMATIC_MAX_CABLES) {
         n_cables = WEBMAP_SCHEMATIC_MAX_CABLES;
     }
 
-    for (i = 0; i < n_cables; i++) {
-        raw_cable_t *rc = &detail.cables[i];
-        float deg;
-        int step;
-        float ux, uy;
-        if (rc->has_approach) {
-            deg = webmap_schematic_snap_deg45(rc->approach_deg);
-        } else {
-            deg = webmap_schematic_snap_deg45(
-                (float)i * 360.f / (float)(n_cables > 0 ? n_cables : 1));
-        }
-        for (step = 0; step < 8; step++) {
-            int spoke = ((int)(deg / 45.f + 0.5f)) % 8;
-            if (spoke < 0) {
-                spoke += 8;
+    /* True geographic approaches (0=N, 90=E). Only near-duplicates
+     * (< 2°) are nudged so chips do not stack — no 45° snap. */
+    {
+        float used_deg[WEBMAP_SCHEMATIC_MAX_CABLES];
+        uint32_t n_used = 0;
+        const float min_sep = 2.f;
+
+        for (i = 0; i < n_cables; i++) {
+            raw_cable_t *rc = &detail.cables[i];
+            float deg;
+            float ux, uy;
+            int step;
+            if (rc->has_approach) {
+                deg = rc->approach_deg;
+            } else {
+                deg = (float)i * 360.f / (float)(n_cables > 0 ? n_cables : 1);
             }
-            if (!used_spoke[spoke]) {
-                used_spoke[spoke] = 1;
-                deg = (float)spoke * 45.f;
-                break;
+            while (deg < 0.f) {
+                deg += 360.f;
             }
-            deg = webmap_schematic_snap_deg45(deg + 45.f);
+            while (deg >= 360.f) {
+                deg -= 360.f;
+            }
+            for (step = 0; step < 360; step++) {
+                uint32_t u;
+                int coll = 0;
+                for (u = 0; u < n_used; u++) {
+                    float d = deg - used_deg[u];
+                    if (d < 0.f) {
+                        d = -d;
+                    }
+                    if (d > 180.f) {
+                        d = 360.f - d;
+                    }
+                    if (d < min_sep) {
+                        coll = 1;
+                        break;
+                    }
+                }
+                if (!coll) {
+                    if (n_used < WEBMAP_SCHEMATIC_MAX_CABLES) {
+                        used_deg[n_used++] = deg;
+                    }
+                    break;
+                }
+                deg += 1.f;
+                if (deg >= 360.f) {
+                    deg -= 360.f;
+                }
+            }
+            webmap_schematic_approach_unit(deg, &ux, &uy);
+            memcpy(cables[i].guid, rc->guid, WEBMAP_SCHEMATIC_GUID_LEN);
+            cables[i].approach_deg = deg;
+            cables[i].ux = ux;
+            cables[i].uy = uy;
+            cables[i].x = cx + ux * rail_r;
+            cables[i].y = cy + uy * rail_r;
+            cables[i].is_drop = rc->is_drop ? 1u : 0u;
+            cables[i].size =
+                rc->size > 0 ? (uint16_t)rc->size : 0u;
+            cables[i].fiber_count = 0;
+            cables[i].fiber_start = 0;
         }
-        webmap_schematic_approach_unit(deg, &ux, &uy);
-        memcpy(cables[i].guid, rc->guid, WEBMAP_SCHEMATIC_GUID_LEN);
-        cables[i].approach_deg = deg;
-        cables[i].ux = ux;
-        cables[i].uy = uy;
-        cables[i].x = cx + ux * rail_r;
-        cables[i].y = cy + uy * rail_r;
-        cables[i].is_drop = rc->is_drop ? 1u : 0u;
-        cables[i].size =
-            rc->size > 0 ? (uint16_t)rc->size : 0u;
-        cables[i].fiber_count = 0;
-        cables[i].fiber_start = 0;
     }
 
     /* Pass 1: max fiber count for shared pitch (recompute lists per cable). */

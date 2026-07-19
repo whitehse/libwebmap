@@ -28,6 +28,7 @@ P4.0–P4.13 landed on `main` (`17f46d2` + ADR-019 closeout). See
 
 - [x] Fiber hover magnifier (dwell + schematic + `splice_detail/` JSON)
 - [x] Magnifier rework: geo approach layout, mouse-pan explore, fiber-chip path trace
+- [x] Magnifier: true bearings (no 45° snap), click-to-open, inspect/navigate modes, mobile pinch/long-press
 - [x] **ADR-017 three-tier data boundary** (sources / packages / display)
 - [x] **Format ownership docs** (`docs/formats/`: packages, fmap, fiber-design-input)
 - [x] **Basemap pipeline** (`tools/basemap_pipeline/` + package manifest fields)

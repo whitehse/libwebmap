@@ -2,9 +2,9 @@
  * @file webmap_schematic.h
  * @brief Pure geometry layout for fiber meet-point schematics (ADR-020 / P4.10).
  *
- * Host interaction (dwell, pan, zoom, Canvas paint) stays JS. This module
+ * Host interaction (click/hold, pan, zoom, Canvas paint) stays JS. This module
  * turns splice_detail JSON into a packed binary layout: cable hubs, strand
- * chip positions, fuse bridge endpoints — snapped to 45° approaches.
+ * chip positions, fuse bridge endpoints — at true geographic approaches.
  *
  * Syscall-free; freestanding-safe (no FILE I/O).
  *
@@ -54,7 +54,7 @@ typedef struct {
 
 typedef struct {
     char     guid[WEBMAP_SCHEMATIC_GUID_LEN];
-    float    approach_deg; /* snapped 0..315 */
+    float    approach_deg; /* true degrees 0=N … 360 (not snapped) */
     float    ux;
     float    uy;
     float    x; /* hub on ring */
@@ -106,7 +106,7 @@ size_t webmap_schematic_layout(const uint8_t *json, size_t json_len,
 size_t webmap_schematic_blob_size(uint32_t n_cables, uint32_t n_fibers,
                                   uint32_t n_fuses);
 
-/** Snap degrees to nearest 45° in [0, 360). */
+/** Snap degrees to nearest 45° in [0, 360). Kept for tests/tools; layout uses true bearings. */
 float webmap_schematic_snap_deg45(float deg);
 
 /**

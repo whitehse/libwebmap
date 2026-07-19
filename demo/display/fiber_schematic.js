@@ -1,11 +1,11 @@
 /**
- * Canvas2D schematics for the fiber hover magnifier.
+ * Canvas2D schematics for the fiber meet-point magnifier.
  *
  * Clean exploratory meet-point view (office / tech — not splicer sheets):
- *  - Cable approaches snapped to 45° / 90° (N/E/S/W + diagonals)
+ *  - Cable / drop approaches use exact geographic bearings (0=N, 90=E)
  *  - Strand dots on each span; fuse pairs drawn as clean midlines
- *  - Hover a dot → highlight that strand and its paired peer on the other span
- *  - Host pans + zooms the world under the glass
+ *  - Highlight a strand and its paired peer on the other span
+ *  - Host pans + zooms the schematic world under the glass
  */
 
 import {
@@ -90,50 +90,86 @@ export function drawLensChrome(ctx, cx, cy, r, title, footer) {
 
 /* ── Direction helpers ─────────────────────────────────────────────── */
 
-/** Snap degrees to nearest 45° (0=N … 315=NW). */
+/** Normalize degrees to [0, 360). */
+export function normalizeDeg(deg) {
+  let d = Number(deg);
+  if (!Number.isFinite(d)) return 0;
+  d = d % 360;
+  if (d < 0) d += 360;
+  return d;
+}
+
+/**
+ * Snap degrees to nearest 45° (0=N … 315=NW).
+ * Kept for tests / callers that want a compass bin; layout no longer snaps.
+ */
 export function snapDeg45(deg) {
-  const d = ((Number(deg) % 360) + 360) % 360;
+  const d = normalizeDeg(deg);
   return (Math.round(d / 45) * 45) % 360;
+}
+
+/** Angular distance in [0, 180]. */
+export function angDistDeg(a, b) {
+  let d = Math.abs(normalizeDeg(a) - normalizeDeg(b)) % 360;
+  if (d > 180) d = 360 - d;
+  return d;
 }
 
 /** 0=N top → unit vector in canvas space (+x right, +y down). */
 export function approachUnit(deg) {
-  const a = ((Number(deg) || 0) * Math.PI) / 180;
+  const a = (normalizeDeg(deg) * Math.PI) / 180;
   return { x: Math.sin(a), y: -Math.cos(a) };
 }
 
 export function compassFromDeg(deg) {
   if (deg == null || Number.isNaN(Number(deg))) return null;
   const labels = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
-  const i = Math.round((((Number(deg) % 360) + 360) % 360) / 45) % 8;
+  const i = Math.round(normalizeDeg(deg) / 45) % 8;
   return labels[i];
 }
 
 /**
- * Place cables on a 45°-snapped ring. Avoid stacking two cables on the same
- * spoke by walking to the next free 45° slot.
+ * Human label for an approach: compass name when within 3° of a 45° spoke,
+ * otherwise the exact bearing (e.g. "32°").
+ */
+export function approachLabel(deg) {
+  if (deg == null || Number.isNaN(Number(deg))) return null;
+  const d = normalizeDeg(deg);
+  const snapped = snapDeg45(d);
+  if (angDistDeg(d, snapped) < 3) return compassFromDeg(snapped);
+  return `${Math.round(d)}°`;
+}
+
+/**
+ * Place cables on the approach ring at their true geographic bearings.
+ * Only near-duplicates (< ~2°) are nudged by 1° so chips do not stack.
+ * @param {Array} cables
+ * @param {number} cx
+ * @param {number} cy
+ * @param {number} radius
  */
 export function layoutCablesByApproach(cables, cx, cy, radius) {
   const list = (cables || []).slice();
   const out = new Map();
   if (!list.length) return out;
 
-  const used = new Set();
+  /** @type {number[]} */
+  const used = [];
+  const minSep = 2; // degrees — only break exact/near stacks
+
   list.forEach((c, i) => {
     let deg =
       c.approach_deg != null && !Number.isNaN(Number(c.approach_deg))
-        ? snapDeg45(c.approach_deg)
-        : snapDeg45((i * 360) / Math.max(list.length, 1));
+        ? normalizeDeg(c.approach_deg)
+        : normalizeDeg((i * 360) / Math.max(list.length, 1));
 
-    // Resolve collisions: step 45° until free
-    for (let step = 0; step < 8; step++) {
-      const key = ((deg % 360) + 360) % 360;
-      if (!used.has(key)) {
-        used.add(key);
-        deg = key;
+    for (let step = 0; step < 360; step++) {
+      const collision = used.some((u) => angDistDeg(u, deg) < minSep);
+      if (!collision) {
+        used.push(deg);
         break;
       }
-      deg = (deg + 45) % 360;
+      deg = normalizeDeg(deg + 1);
     }
 
     const u = approachUnit(deg);
@@ -142,7 +178,7 @@ export function layoutCablesByApproach(cables, cx, cy, radius) {
       size: c.size,
       is_drop: !!c.is_drop,
       deg,
-      label: c.approach || compassFromDeg(deg),
+      label: c.approach || approachLabel(deg),
       ux: u.x,
       uy: u.y,
       // Hub sits on the ring; fiber column is further out
@@ -540,7 +576,7 @@ export function mapsFromSchematicLayout(precomputed, cx, cy) {
       size: c.size,
       is_drop: !!c.is_drop,
       deg: c.approach_deg,
-      label: compassFromDeg(c.approach_deg),
+      label: approachLabel(c.approach_deg),
       ux: c.ux,
       uy: c.uy,
       x: c.x + dx,
@@ -852,7 +888,7 @@ export function drawGeoMeetSchematic(ctx, cx, cy, r, detail, focus, opts = {}) {
     const y0 = cy + pos.uy * 14;
     const x1 = pos.x - pos.ux * 10;
     const y1 = pos.y - pos.uy * 10;
-    // Keep stub radial (already 45°-snapped unit vectors → clean rays)
+    // Keep stub radial (true approach unit vectors)
     ctx.moveTo(x0, y0);
     ctx.lineTo(x1, y1);
     ctx.stroke();
@@ -1084,7 +1120,7 @@ export function drawGeoMeetSchematic(ctx, cx, cy, r, detail, focus, opts = {}) {
       (l) => l.role === "drop" && (!l.a || !layout.has(l.a.cable))
     );
     openDrops.slice(0, 4).forEach((l, i) => {
-      const deg = snapDeg45(135 + i * 45);
+      const deg = normalizeDeg(135 + i * (openDrops.length > 1 ? 50 : 0));
       const u = approachUnit(deg);
       const x = cx + u.x * (railR * 0.9);
       const y = cy + u.y * (railR * 0.9);
@@ -1182,14 +1218,19 @@ export function paintMagnifierContent(ctx, cx, cy, rCss, hit, detail, opts = {})
     }
   }
 
-  let footer = "scroll zoom · move to pan · click fiber";
+  const mode = opts.mode || "inspect";
+  let footer = "scroll/pinch zoom · tap fiber";
   if (hit.sp_guid && (hit.kind === "tap" || hit.kind === "splice")) {
-    footer =
-      layoutSource === "wasm"
-        ? "layout:wasm · scroll zoom · hover pair · click=trace"
-        : "scroll out=full SP · in=strands · hover pair · click=trace";
+    if (mode === "navigate") {
+      footer = "drag glass along plant · hold = inspect";
+    } else {
+      footer =
+        layoutSource === "wasm"
+          ? "layout:wasm · zoom · tap fiber · hold = move glass"
+          : "zoom strands · tap fiber · hold = move glass";
+    }
   } else if (hit.kind === "cable" || hit.kind === "drop") {
-    footer = "click map cable for paths";
+    footer = "tap map cable for paths";
   }
 
   const { bodyTop, bodyBot } = drawLensChrome(ctx, cx, cy, rCss, title, footer);

@@ -120,9 +120,12 @@ export function diagramUrl(spGuid, diagramIndex, diagramsBase) {
   return base.replace(/\/?$/, "/") + name;
 }
 
-/* ── Hover magnifier (display policy) ──────────────────────────────── */
+/* ── Meet-point magnifier (display policy) ─────────────────────────── */
 
-/** Dwell time before the magnifier opens (ms). */
+/**
+ * @deprecated Glass opens on click/tap, not hover dwell.
+ * Kept for any external callers; no longer used by fiber_magnifier.
+ */
 export const HOVER_DELAY_MS = 420;
 
 /** Extra screen-space pad when hit-testing lines (CSS px). */

@@ -1590,6 +1590,19 @@ function selectIdealTileZoom(zoom) {
 }
 
 /* ── Interaction ───────────────────────────────────────────────────── */
+/*
+ * Glass UX (desktop + mobile browser):
+ *  - Tap/click splice or tap once → open meet-point glass (true bearings)
+ *  - Double-click SP (desktop) or long-press SP (mobile) → full splice diagram
+ *  - Wheel / pinch inside glass → zoom schematic world
+ *  - Long-press inside glass → toggle inspect ↔ navigate
+ *  - Navigate mode: drag moves glass focus along the plant
+ *  - Inspect mode: drag pans schematic; tap fiber chips to path-trace
+ *  - Esc closes glass (then clears path trace)
+ */
+
+const LONG_PRESS_MS = 480;
+const LONG_PRESS_SLOP = 10;
 
 let dragging = false;
 let lastX = 0;
@@ -1598,108 +1611,287 @@ let lastY = 0;
 let ptrDownX = 0;
 let ptrDownY = 0;
 let ptrDidDrag = false;
+/** True when the active gesture is owned by the glass (not map pan). */
+let glassGesture = false;
+/** @type {number|null} */
+let longPressTimer = null;
+/** @type {'sp-diagram'|'glass-mode'|null} */
+let longPressKind = null;
+let longPressFired = false;
+/** Active pointers for pinch (pointerId → {x,y}). */
+const activePointers = new Map();
+let pinchActive = false;
+
+function clearLongPress() {
+  if (longPressTimer != null) {
+    clearTimeout(longPressTimer);
+    longPressTimer = null;
+  }
+  longPressKind = null;
+}
+
+function canvasCss(e) {
+  const rect = canvas.getBoundingClientRect();
+  view.w = Math.max(1, rect.width);
+  view.h = Math.max(1, rect.height);
+  return {
+    cssX: e.clientX - rect.left,
+    cssY: e.clientY - rect.top,
+    rect,
+  };
+}
+
+function pinchDist() {
+  if (activePointers.size < 2) return 0;
+  const pts = [...activePointers.values()];
+  return Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+}
+
+function pinchMid() {
+  const pts = [...activePointers.values()];
+  if (pts.length < 2) return null;
+  return {
+    x: (pts[0].x + pts[1].x) / 2,
+    y: (pts[0].y + pts[1].y) / 2,
+  };
+}
 
 canvas.addEventListener("pointerdown", (e) => {
-  dragging = true;
+  const { cssX, cssY } = canvasCss(e);
+  activePointers.set(e.pointerId, { x: cssX, y: cssY });
+  try {
+    canvas.setPointerCapture(e.pointerId);
+  } catch {
+    /* ignore */
+  }
+
   ptrDidDrag = false;
-  lastX = e.clientX;
-  lastY = e.clientY;
+  longPressFired = false;
   ptrDownX = e.clientX;
   ptrDownY = e.clientY;
-  canvas.setPointerCapture(e.pointerId);
+  lastX = e.clientX;
+  lastY = e.clientY;
   cam.zoomAnchor = null;
-  cam.targetZoom = cam.zoom; // stop settle while panning
-  if (fiberLayer) fiberLayer.cancelHover();
+  cam.targetZoom = cam.zoom;
+
+  // Two-finger pinch over glass → zoom schematic
+  if (activePointers.size >= 2 && fiberLayer?.magnifierOpen) {
+    clearLongPress();
+    dragging = false;
+    glassGesture = true;
+    const mid = pinchMid();
+    const dist = pinchDist();
+    if (mid && dist > 0) {
+      pinchActive = fiberLayer.glassPinchStart(dist, mid.x, mid.y, view);
+    }
+    return;
+  }
+
+  // Glass owns the gesture when pointer is in the lens
+  if (fiberLayer?.magnifierOpen && fiberLayer.glassPointerDown(cssX, cssY, view)) {
+    glassGesture = true;
+    dragging = false;
+    clearLongPress();
+    // Long-press inside glass toggles inspect ↔ navigate
+    longPressKind = "glass-mode";
+    longPressTimer = setTimeout(() => {
+      longPressTimer = null;
+      if (ptrDidDrag) return;
+      longPressFired = true;
+      fiberLayer.glassToggleMode();
+      // Re-arm drag under the same finger for the new mode
+      fiberLayer.glassPointerDown(cssX, cssY, view);
+      canvas.style.cursor =
+        fiberLayer.glassMode() === "navigate" ? "move" : "pointer";
+    }, LONG_PRESS_MS);
+    canvas.style.cursor =
+      fiberLayer.glassMode() === "navigate" ? "grabbing" : "pointer";
+    return;
+  }
+
+  glassGesture = false;
+  dragging = true;
   canvas.style.cursor = "grabbing";
-});
-canvas.addEventListener("pointerup", (e) => {
-  dragging = false;
-  canvas.style.cursor = "";
-  // Click (not drag): magnifier fiber → path trace; cable → paths; tap/splice → diagram
-  if (
-    !ptrDidDrag &&
-    Math.hypot(e.clientX - ptrDownX, e.clientY - ptrDownY) < 6 &&
-    fiberLayer?.show
-  ) {
-    const rect = canvas.getBoundingClientRect();
-    const cssX = e.clientX - rect.left;
-    const cssY = e.clientY - rect.top;
-    // Magnifier explore / fiber-chip trace takes priority
-    if (
-      fiberLayer.magnifierOpen &&
-      fiberLayer.handleClick(cssX, cssY, view, {
-        altKey: e.altKey,
-        detail: e.detail,
-      })
-    ) {
-      /* handled */
-    } else {
-      const hit = fiberLayer.pick(cssX, cssY, view, cam, metersPerPixel);
-      if (hit && (hit.kind === "cable" || hit.kind === "drop")) {
-        if (fiberTrace?.enabled) {
-          fiberTrace.selectByCable(hit.cable_guid || "");
-        } else {
-          log("Path index not available for this package");
-        }
-      } else {
-        fiberLayer.handleClick(cssX, cssY, view, {
-          altKey: e.altKey,
-          detail: e.detail,
-        });
-      }
+
+  // Long-press on SP opens full splice diagram (mobile double-click equiv)
+  if (fiberLayer?.show) {
+    const hit = fiberLayer.pick(cssX, cssY, view, cam, metersPerPixel);
+    if (hit && (hit.kind === "tap" || hit.kind === "splice") && hit.sp_guid) {
+      longPressKind = "sp-diagram";
+      const spGuid = hit.sp_guid;
+      longPressTimer = setTimeout(() => {
+        longPressTimer = null;
+        if (ptrDidDrag) return;
+        longPressFired = true;
+        dragging = false;
+        fiberLayer.openDiagram(spGuid);
+      }, LONG_PRESS_MS);
     }
   }
 });
 
-window.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && fiberTrace) {
-    fiberTrace.clear();
-  }
-});
-canvas.addEventListener("pointerleave", () => {
-  if (fiberLayer) fiberLayer.cancelHover();
-  if (!dragging) canvas.style.cursor = "";
-});
 canvas.addEventListener("pointermove", (e) => {
-  const rect = canvas.getBoundingClientRect();
-  const cssX = e.clientX - rect.left;
-  const cssY = e.clientY - rect.top;
+  const { cssX, cssY } = canvasCss(e);
+  if (activePointers.has(e.pointerId)) {
+    activePointers.set(e.pointerId, { x: cssX, y: cssY });
+  }
+
+  if (
+    Math.hypot(e.clientX - ptrDownX, e.clientY - ptrDownY) > LONG_PRESS_SLOP
+  ) {
+    if (!ptrDidDrag) {
+      ptrDidDrag = true;
+      clearLongPress();
+    }
+  }
+
+  // Pinch zoom
+  if (pinchActive && activePointers.size >= 2 && fiberLayer?.magnifierOpen) {
+    const mid = pinchMid();
+    const dist = pinchDist();
+    if (mid && dist > 0) {
+      fiberLayer.glassPinchMove(dist, mid.x, mid.y, view);
+    }
+    return;
+  }
+
+  // Glass drag (navigate or inspect pan)
+  if (glassGesture && fiberLayer?.magnifierOpen) {
+    fiberLayer.handlePointerMove?.(cssX, cssY, view, cam, metersPerPixel);
+    lastX = e.clientX;
+    lastY = e.clientY;
+    return;
+  }
 
   if (dragging) {
     const dx = e.clientX - lastX;
     const dy = e.clientY - lastY;
     lastX = e.clientX;
     lastY = e.clientY;
-    if (Math.hypot(e.clientX - ptrDownX, e.clientY - ptrDownY) > 5)
-      ptrDidDrag = true;
     const mpp = metersPerPixel(); // CSS pixels
     const [mx, my] = projectCenter();
     setCenterMerc(mx - dx * mpp, my + dy * mpp);
-    if (fiberLayer) fiberLayer.cancelHover();
     return;
   }
 
-  // Hover magnifier (dwell → enlarged feature + splice detail)
+  // Cursor affordance only (does not open glass)
   if (fiberLayer?.show) {
-    const over = fiberLayer.handleHover(
+    const over = fiberLayer.handlePointerMove(
       cssX,
       cssY,
       view,
       cam,
-      metersPerPixel,
-      false
+      metersPerPixel
     );
-    canvas.style.cursor = over ? "pointer" : "";
+    if (fiberLayer.magnifierOpen && fiberLayer.glassMode() === "navigate") {
+      canvas.style.cursor = "move";
+    } else {
+      canvas.style.cursor = over ? "pointer" : "";
+    }
   }
+});
+
+function endPointer(e) {
+  const { cssX, cssY } = canvasCss(e);
+  activePointers.delete(e.pointerId);
+
+  if (activePointers.size < 2 && pinchActive) {
+    fiberLayer?.glassPinchEnd?.();
+    pinchActive = false;
+  }
+
+  const wasGlass = glassGesture;
+  const wasDrag = ptrDidDrag;
+  const wasLong = longPressFired;
+  clearLongPress();
+
+  if (wasGlass && fiberLayer) {
+    fiberLayer.glassPointerUp(cssX, cssY, view);
+  }
+
+  // Still tracking another finger — leave gesture state alone
+  if (activePointers.size > 0) {
+    return;
+  }
+
+  dragging = false;
+  glassGesture = false;
+  canvas.style.cursor = fiberLayer?.magnifierOpen
+    ? fiberLayer.glassMode() === "navigate"
+      ? "move"
+      : "pointer"
+    : "";
+
+  if (wasLong) return; // long-press already handled
+  if (wasDrag) return;
+  if (Math.hypot(e.clientX - ptrDownX, e.clientY - ptrDownY) >= 6) return;
+  if (!fiberLayer?.show) return;
+
+  // Click: glass / SP open glass / double-click diagram / cable paths
+  if (fiberLayer.magnifierOpen && fiberLayer.magnifier?.pointInLens?.(cssX, cssY, view)) {
+    fiberLayer.handleClick(cssX, cssY, view, {
+      altKey: e.altKey,
+      detail: e.detail,
+    });
+    return;
+  }
+
+  const hit = fiberLayer.pick(cssX, cssY, view, cam, metersPerPixel);
+  if (hit && (hit.kind === "cable" || hit.kind === "drop")) {
+    if (fiberTrace?.enabled) {
+      fiberTrace.selectByCable(hit.cable_guid || "");
+    } else {
+      log("Path index not available for this package");
+    }
+    return;
+  }
+
+  // SP: detail≥2 → diagram; else open glass
+  fiberLayer.handleClick(cssX, cssY, view, {
+    altKey: e.altKey,
+    detail: e.detail,
+  });
+}
+
+canvas.addEventListener("pointerup", endPointer);
+canvas.addEventListener("pointercancel", endPointer);
+
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    if (fiberLayer?.magnifierOpen) {
+      fiberLayer.cancelGlass();
+      canvas.style.cursor = "";
+      return;
+    }
+    if (fiberTrace) fiberTrace.clear();
+  }
+  // Desktop: hold Space while glass is open to enter navigate mode
+  if (e.code === "Space" && fiberLayer?.magnifierOpen && !e.repeat) {
+    e.preventDefault();
+    if (fiberLayer.glassMode() !== "navigate") {
+      fiberLayer.magnifier?.setMode?.("navigate");
+      canvas.style.cursor = "move";
+    }
+  }
+});
+window.addEventListener("keyup", (e) => {
+  if (e.code === "Space" && fiberLayer?.magnifierOpen) {
+    if (fiberLayer.glassMode() === "navigate") {
+      fiberLayer.magnifier?.setMode?.("inspect");
+      canvas.style.cursor = "pointer";
+    }
+  }
+});
+
+canvas.addEventListener("pointerleave", () => {
+  if (!dragging && !glassGesture) canvas.style.cursor = "";
 });
 
 canvas.addEventListener(
   "wheel",
   (e) => {
     e.preventDefault();
-    // Use cached view size + offsetLeft/Top-free coords from the event target.
     const rect = canvas.getBoundingClientRect();
-    // Keep view.w/h fresh if the window moved without a resize event.
     view.w = Math.max(1, rect.width);
     view.h = Math.max(1, rect.height);
     const sx = e.clientX - rect.left;
@@ -1709,8 +1901,6 @@ canvas.addEventListener(
     if (fiberLayer?.handleWheel?.(sx, sy, view, e.deltaY)) {
       return;
     }
-
-    if (fiberLayer) fiberLayer.cancelHover();
 
     // Stable zoom-around point for the whole gesture (do not re-sample
     // intermediate animated zoom — that causes hesitation/jitter).
@@ -1984,8 +2174,8 @@ async function tryWasm() {
         " · schematic " +
         (schematicLayout?.hasWasm ? "wasm" : "js") +
         " · " +
-        "hover magnifier · scroll=zoom glass · hover strand=pair · " +
-        "click fiber=trace · click cable=paths · dbl-click glass=diagram · Esc=clear · z≥" +
+        "click SP=glass · dbl-click/hold SP=diagram · scroll/pinch=zoom glass · " +
+        "hold glass=move · Space=navigate · click fiber=trace · Esc=close · z≥" +
         fiberTapZmin
     );
     lastFrameT = performance.now();
