@@ -120,9 +120,13 @@ python3 -m http.server -d demo 8765   # Chrome/Edge + WebGPU
 | 016 | Fiber hover magnifier + compact splice detail |
 | 017 | **Three-tier data boundary** (sources / packages / display) |
 | 018 | Fiber path visual trace (host highlight + path_index) |
+| 019 | **Memory budgets from measurement** (P4.0 / P4.1) |
+| 020 | Schematic layout WASM export (P4.10) |
+| 021–023 | Glass UI, weather host paint, dynamic feed |
 | 024 | **WASM host contract** (packing + staging + flat layers) |
 | 025 | **Freestanding WASM free-list heap** (P4.3 reclaim) |
 | 026 | **WASM basemap parse auto** (P4.13 decode-and-drop; `?wasm=0` → JS) |
+| 027 | Optional WebGPU glass lens (`?glass_gpu=1`) |
 
 Host tools also include **`fiber2features`** (design DB → `.fmap` package),
 **`splice_diagram`** (design DB → HTML under `demo/splice_diagrams/`), and

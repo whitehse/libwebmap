@@ -44,7 +44,9 @@ python3 -m http.server -d demo 8765
 | `?mem=0` | HUD hidden (counters still run if modules call `memStats`) |
 | `?max_tiles=256` | Host basemap + fiber LRU cap (default **256**) |
 | `?max_tiles=0` | Unlimited host tile residency (debug; old pyramid-like) |
-| `?wasm=1` | Basemap `.wmap` parse via freestanding WASM (P4.5); style/extrude still JS; **not default** (P4.6 / ADR-026) |
+| `?wasm=1` | Force WASM basemap decode attempt (still falls back to JS on load failure) |
+| `?wasm=0` | Force pure JS parse (A/B / constrained env) |
+| *(default)* | **auto** WASM decode-and-drop when `webmap.wasm` loads (P4.13 / ADR-026) |
 
 ### P4.2 tile residency
 

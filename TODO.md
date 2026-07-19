@@ -1,5 +1,10 @@
 # TODO — libwebmap
 
+## Track 4 (program design) — complete
+
+P4.0–P4.13 landed on `main` (`17f46d2` + ADR-019 closeout). See
+`docs/guides/wasm-default-on-gate.md` and ADRs 019–027.
+
 ## Done
 
 - [x] Scaffold: CMake, pure C11, agent-ready docs, LICENSE
@@ -41,19 +46,20 @@
 - [ ] pkg-config + install man page
 - [ ] Fuzz harness for `.wmap` and MVT parsers
 - [x] Wire WASM exports into demo basemap parse path (`?wasm=1`; style/extrude still JS host)
-- [x] **P4.0 Memory measurement harness** (`demo/display/mem_stats.js` + sidebar HUD + [guides/memory-attribution.md](docs/guides/memory-attribution.md))
-- [x] **P4.2** Tile cache eviction + max_tiles HUD (C LRU + `webmap_tile_eviction`; host `tile_cache.js` lazy + `?max_tiles=`)
-- [x] **P4.3** Freestanding WASM free-list reclaim (+ watermark reload safety; ADR-025; `webmap_wasm_heap` ctest)
-- [x] **P4.4** WASM host contract (ABI pack export, flat `get_layer`, staging; ADR-024)
-- [x] **P4.5** Demo `?wasm=1` basemap path (`demo/display/wasm_host.js`)
-- [x] **P4.6** Compare JS vs WASM parse; **default remains JS** (ADR-026; `tools/compare_wasm_parse.mjs`)
-- [x] **P4.7** Weather package host paint + opacity (`demo/display/weather_layer.js`, ADR-022, fixture under `demo/weather/`)
-- [x] **P4.8** Glass UI tokens + CSS (`demo/display/glass_ui.css`, `glass_tokens.js`, ADR-021, [guides/glass-ui.md](docs/guides/glass-ui.md))
-- [x] **P4.9** Dynamic feed offline + optional WS (`demo/display/dynamic_feed.js`, ADR-023, fixture JSONL, [guides/dynamic-feed.md](docs/guides/dynamic-feed.md))
-- [x] **P4.10** Schematic layout WASM/C export (`webmap_schematic_layout`, ADR-020, [guides/schematic-layout.md](docs/guides/schematic-layout.md))
-- [x] **P4.11** Magnifier consumes layout export (`createSchematicLayoutService`, `?schematic=`, precomputed paint path)
-- [x] **P4.12** Optional WebGPU glass lens (`?glass_gpu=1`, `glass_lens_gpu.js`, ADR-027)
-- [x] **P4.13** WASM default auto + decode-and-drop (`webmap_drop_tile`, `?wasm=0` opt-out, gate green)
+- [x] **P4.0** Memory measurement harness (`mem_stats.js` + HUD + [memory-attribution.md](docs/guides/memory-attribution.md))
+- [x] **P4.1** Measurement budgets ADR ([019](docs/decisions/019-memory-budgets-from-measurement.md))
+- [x] **P4.2** Tile cache eviction + max_tiles HUD (C LRU + `tile_cache.js` + `?max_tiles=`)
+- [x] **P4.3** Freestanding WASM free-list reclaim (+ watermark; ADR-025)
+- [x] **P4.4** WASM host contract (ABI pack, flat `get_layer`, staging; ADR-024)
+- [x] **P4.5** Demo WASM basemap path (`wasm_host.js`)
+- [x] **P4.6** Compare JS vs WASM parse (`tools/compare_wasm_parse.mjs`; gate doc)
+- [x] **P4.7** Weather package host paint + opacity (`weather_layer.js`, ADR-022)
+- [x] **P4.8** Glass UI tokens + CSS (`glass_ui.css`, ADR-021)
+- [x] **P4.9** Dynamic feed offline + optional WS (`dynamic_feed.js`, ADR-023)
+- [x] **P4.10** Schematic layout WASM/C export (`webmap_schematic_layout`, ADR-020)
+- [x] **P4.11** Magnifier consumes layout export (`?schematic=`)
+- [x] **P4.12** Optional WebGPU glass lens (`?glass_gpu=1`, ADR-027)
+- [x] **P4.13** WASM default **auto** + decode-and-drop (`webmap_drop_tile`, `?wasm=0` opt-out)
 
 ## Low priority
 
