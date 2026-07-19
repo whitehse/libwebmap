@@ -25,8 +25,15 @@ import {
   MAGNIFIER_WORLD_SCALE,
   MAGNIFIER_ZOOM_MIN,
   MAGNIFIER_ZOOM_MAX,
+  MAGNIFIER_EXPAND_TUBES_ZOOM,
+  FIBERS_PER_TUBE,
   tiaFiberColor,
   tiaFiberIsLight,
+  fiberTubeIndex,
+  fiberInTube,
+  tiaTubeColor,
+  tiaTubeName,
+  tubeCountForSize,
 } from "./fiber_style.js";
 import {
   tapLightTopology,
@@ -221,6 +228,186 @@ export function fusePairsFromLinks(links) {
     });
   }
   return out;
+}
+
+/**
+ * Ring-splice / tube-breakout model for the upside-down glass.
+ *
+ * Intact tubes (all fibers pure cable↔cable fuse, no through/drop) are drawn
+ * as solid buffer tubes. Tubes that contain a through-tap or drop strand are
+ * broken out into individual fibers (typically 12).
+ *
+ * @param {object} detail splice_detail
+ * @param {{ expandAllTubes?: boolean }} [opts]
+ * @returns {{
+ *   openTubeIdx: Set<number>,
+ *   intactTubes: Array<{tubeIdx:number,a:string,b:string,fibers:number[]}>,
+ *   openFibers: Set<string>,
+ *   fusePairs: ReturnType<typeof fusePairsFromLinks>,
+ *   tapTopo: object|null,
+ *   shouldShowFiber: (cable:string, fiber:number) => boolean,
+ *   isIntactFuse: (aCable:string, aFiber:number, bCable:string, bFiber:number) => boolean
+ * }}
+ */
+export function analyzeRingSplice(detail, opts = {}) {
+  const fusePairs = fusePairsFromLinks(detail?.links || []);
+  const isTap = !!(detail?.kind === "tap" || detail?.tap);
+  const tapTopo = isTap ? tapLightTopology(detail) : null;
+  const expandAll = !!opts.expandAllTubes;
+
+  /** @type {Set<string>} */
+  const openFibers = new Set();
+  if (tapTopo) {
+    for (const t of tapTopo.through) {
+      openFibers.add(endpointKey(t.in.cable, t.in.fiber));
+      openFibers.add(endpointKey(t.out.cable, t.out.fiber));
+    }
+    for (const d of tapTopo.drops) {
+      if (d.drop) openFibers.add(endpointKey(d.drop.cable, d.drop.fiber));
+      if (d.from) openFibers.add(endpointKey(d.from.cable, d.from.fiber));
+    }
+  }
+
+  /** @type {Set<number>} */
+  const openTubeIdx = new Set();
+  for (const k of openFibers) {
+    const fiber = Number(String(k).split("|")[1]);
+    if (fiber > 0) openTubeIdx.add(fiberTubeIndex(fiber));
+  }
+
+  // Mismatched tube indices on a fuse force both tubes open
+  for (const p of fusePairs) {
+    const ta = fiberTubeIndex(p.a.fiber);
+    const tb = fiberTubeIndex(p.b.fiber);
+    if (ta !== tb) {
+      openTubeIdx.add(ta);
+      openTubeIdx.add(tb);
+    }
+  }
+
+  if (expandAll) {
+    for (const c of detail?.cables || []) {
+      const n = tubeCountForSize(c.size) || 1;
+      for (let t = 0; t < n; t++) openTubeIdx.add(t);
+    }
+    for (const p of fusePairs) {
+      openTubeIdx.add(fiberTubeIndex(p.a.fiber));
+      openTubeIdx.add(fiberTubeIndex(p.b.fiber));
+    }
+  }
+
+  /** @type {Map<string, {tubeIdx:number,a:string,b:string,fibers:number[]}>} */
+  const byTubePair = new Map();
+  for (const p of fusePairs) {
+    const ti = fiberTubeIndex(p.a.fiber);
+    if (fiberTubeIndex(p.b.fiber) !== ti) continue;
+    if (openTubeIdx.has(ti)) continue;
+    const c1 = p.a.cable;
+    const c2 = p.b.cable;
+    const [lo, hi] = c1 < c2 ? [c1, c2] : [c2, c1];
+    const key = `${ti}|${lo}|${hi}`;
+    let row = byTubePair.get(key);
+    if (!row) {
+      row = { tubeIdx: ti, a: lo, b: hi, fibers: [] };
+      byTubePair.set(key, row);
+    }
+    row.fibers.push(p.a.fiber);
+  }
+
+  const intactTubes = [...byTubePair.values()];
+
+  /** @type {Set<string>} fuse keys covered by an intact tube */
+  const intactFuseKeys = new Set();
+  for (const p of fusePairs) {
+    const ti = fiberTubeIndex(p.a.fiber);
+    if (openTubeIdx.has(ti)) continue;
+    if (fiberTubeIndex(p.b.fiber) !== ti) continue;
+    const c1 = p.a.cable;
+    const c2 = p.b.cable;
+    const [lo, hi] = c1 < c2 ? [c1, c2] : [c2, c1];
+    if (byTubePair.has(`${ti}|${lo}|${hi}`)) {
+      intactFuseKeys.add(
+        `${endpointKey(p.a.cable, p.a.fiber)}::${endpointKey(p.b.cable, p.b.fiber)}`
+      );
+      intactFuseKeys.add(
+        `${endpointKey(p.b.cable, p.b.fiber)}::${endpointKey(p.a.cable, p.a.fiber)}`
+      );
+    }
+  }
+
+  function shouldShowFiber(cable, fiber) {
+    if (!(fiber > 0)) return false;
+    const cab = (detail?.cables || []).find((c) => c.guid === cable);
+    if (cab?.is_drop) return true;
+    if (openTubeIdx.has(fiberTubeIndex(fiber))) return true;
+    if (openFibers.has(endpointKey(cable, fiber))) return true;
+    return false;
+  }
+
+  function isIntactFuse(aCable, aFiber, bCable, bFiber) {
+    return intactFuseKeys.has(
+      `${endpointKey(aCable, aFiber)}::${endpointKey(bCable, bFiber)}`
+    );
+  }
+
+  return {
+    openTubeIdx,
+    intactTubes,
+    openFibers,
+    fusePairs,
+    tapTopo,
+    shouldShowFiber,
+    isIntactFuse,
+  };
+}
+
+/**
+ * Draw a buffer-tube pipe between two points (ring pass-through).
+ */
+function drawTubePipe(ctx, x0, y0, x1, y1, tubeIdx, lit, dim) {
+  const color = tiaTubeColor(tubeIdx);
+  const name = tiaTubeName(tubeIdx);
+  ctx.save();
+  ctx.globalAlpha = dim ? 0.12 : lit ? 1 : 0.88;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  // Outer sheath
+  ctx.strokeStyle = "rgba(0,0,0,0.45)";
+  ctx.lineWidth = lit ? 11 : 9;
+  ctx.beginPath();
+  ctx.moveTo(x0, y0);
+  ctx.lineTo(x1, y1);
+  ctx.stroke();
+  // Tube body
+  ctx.strokeStyle = color;
+  ctx.lineWidth = lit ? 7.5 : 6;
+  ctx.beginPath();
+  ctx.moveTo(x0, y0);
+  ctx.lineTo(x1, y1);
+  ctx.stroke();
+  // Highlight ridge
+  ctx.strokeStyle = "rgba(255,255,255,0.28)";
+  ctx.lineWidth = lit ? 2.2 : 1.6;
+  ctx.beginPath();
+  ctx.moveTo(x0, y0);
+  ctx.lineTo(x1, y1);
+  ctx.stroke();
+
+  const mx = (x0 + x1) / 2;
+  const my = (y0 + y1) / 2;
+  ctx.fillStyle = lit ? "#fff" : "rgba(255,255,255,0.82)";
+  ctx.font = `700 ${lit ? 9 : 8}px system-ui, sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  // Dark halo for light tubes (White/Yellow)
+  if (tubeIdx % 12 === 5 || tubeIdx % 12 === 8) {
+    ctx.strokeStyle = "rgba(0,0,0,0.55)";
+    ctx.lineWidth = 3;
+    ctx.strokeText(`${name}`, mx, my);
+  }
+  ctx.fillText(`${name}`, mx, my);
+  ctx.restore();
+  return { mx, my };
 }
 
 /**
@@ -624,7 +811,6 @@ export function drawGeoMeetSchematic(ctx, cx, cy, r, detail, focus, opts = {}) {
   const links = detail.links || [];
   const tap = detail.tap;
   const isTap = !!(detail.kind === "tap" || tap);
-  const fusePairs = fusePairsFromLinks(links);
   const equipLinks = links.filter(
     (l) =>
       l.role === "ingress" ||
@@ -633,14 +819,27 @@ export function drawGeoMeetSchematic(ctx, cx, cy, r, detail, focus, opts = {}) {
       l.role === "equip"
   );
 
+  const glassZoom = Number(opts.zoom) || 1;
+  const expandAllTubes =
+    !!opts.expandAllTubes || glassZoom >= MAGNIFIER_EXPAND_TUBES_ZOOM;
+  const ring = analyzeRingSplice(detail, { expandAllTubes });
+  const fusePairs = ring.fusePairs;
+  const tapTopo = ring.tapTopo;
+
   const railR = r * 0.58;
   /** @type {Map<string, object>} */
   let layout;
   /** @type {Map<string, {x:number,y:number,pos:object,fiber:number,chipR:number}>} */
   let fiberPos;
+  /** @type {Map<string, {x:number,y:number,tubeIdx:number,cable:string}>} */
+  const tubePorts = new Map();
   let chipR = 5;
 
-  const pre = mapsFromSchematicLayout(opts.precomputed, cx, cy);
+  // Tube breakout is JS-only (richer than WASM spoke layout)
+  const pre =
+    !expandAllTubes && ring.intactTubes.length === 0
+      ? mapsFromSchematicLayout(opts.precomputed, cx, cy)
+      : null;
   if (pre) {
     layout = pre.layout;
     fiberPos = pre.fiberPos;
@@ -650,7 +849,10 @@ export function drawGeoMeetSchematic(ctx, cx, cy, r, detail, focus, opts = {}) {
     fiberPos = new Map();
     /** @type {Map<string, number[]>} */
     const fibersByCable = new Map();
-    let maxFibOnRail = 0;
+    /** @type {Map<string, number[]>} intact tube indices per cable */
+    const tubesByCable = new Map();
+    let maxSlots = 0;
+
     for (const pos of layout.values()) {
       let fibers = fibersForCable(pos.guid, links);
       if (!fibers.length && equipLinks.length) {
@@ -659,31 +861,69 @@ export function drawGeoMeetSchematic(ctx, cx, cy, r, detail, focus, opts = {}) {
         }
         fibers = [...new Set(fibers)].sort((a, b) => a - b);
       }
-      fibers = fibers.slice(0, SCHEMATIC_MAX_FIBERS);
+      // Include full opened-tube fiber range so breakout shows all 12 strands
+      if (!pos.is_drop && ring.openTubeIdx.size) {
+        const size = pos.size || Math.max(0, ...fibers, 0);
+        const extra = [];
+        for (const ti of ring.openTubeIdx) {
+          const lo = ti * FIBERS_PER_TUBE + 1;
+          const hi = Math.min((ti + 1) * FIBERS_PER_TUBE, size || lo + 11);
+          for (let f = lo; f <= hi; f++) extra.push(f);
+        }
+        fibers = [...new Set([...fibers, ...extra])].sort((a, b) => a - b);
+      }
+      fibers = fibers
+        .filter((fn) => ring.shouldShowFiber(pos.guid, fn))
+        .slice(0, SCHEMATIC_MAX_FIBERS);
       fibersByCable.set(pos.guid, fibers);
-      if (fibers.length > maxFibOnRail) maxFibOnRail = fibers.length;
+
+      const intactOnCab = ring.intactTubes
+        .filter((t) => t.a === pos.guid || t.b === pos.guid)
+        .map((t) => t.tubeIdx)
+        .sort((a, b) => a - b);
+      tubesByCable.set(pos.guid, [...new Set(intactOnCab)]);
+      maxSlots = Math.max(maxSlots, fibers.length + intactOnCab.length);
     }
-    const railMetrics = strandLayoutMetrics(maxFibOnRail);
+
+    const railMetrics = strandLayoutMetrics(Math.max(maxSlots, 1));
     const { slot } = railMetrics;
     chipR = railMetrics.chipR;
+    const tubeSlot = Math.max(slot * 1.35, 10);
 
     for (const pos of layout.values()) {
       const fibers = fibersByCable.get(pos.guid) || [];
+      const tubes = tubesByCable.get(pos.guid) || [];
       const cross = strandCrossAxis(pos.ux, pos.uy);
-      const outX = pos.x + pos.ux * 6;
-      const outY = pos.y + pos.uy * 6;
-      const n = fibers.length;
-      fibers.forEach((fn, i) => {
+      const outX = pos.x + pos.ux * 8;
+      const outY = pos.y + pos.uy * 8;
+      // Slot list: intact tubes first (grouped), then opened fibers
+      /** @type {Array<{kind:'tube'|'fiber', tubeIdx?:number, fiber?:number}>} */
+      const slots = [];
+      for (const ti of tubes) slots.push({ kind: "tube", tubeIdx: ti });
+      for (const fn of fibers) slots.push({ kind: "fiber", fiber: fn });
+      const n = slots.length;
+      // Even spacing with slightly larger pitch when tubes present
+      const pitch = tubes.length ? (slot + tubeSlot) / 2 : slot;
+      slots.forEach((s, i) => {
         const t = n <= 1 ? 0 : i - (n - 1) / 2;
-        const fx = outX + cross.x * t * slot;
-        const fy = outY + cross.y * t * slot;
-        fiberPos.set(endpointKey(pos.guid, fn), {
-          x: fx,
-          y: fy,
-          pos,
-          fiber: fn,
-          chipR,
-        });
+        const fx = outX + cross.x * t * pitch;
+        const fy = outY + cross.y * t * pitch;
+        if (s.kind === "fiber") {
+          fiberPos.set(endpointKey(pos.guid, s.fiber), {
+            x: fx,
+            y: fy,
+            pos,
+            fiber: s.fiber,
+            chipR,
+          });
+        } else {
+          tubePorts.set(`${pos.guid}|${s.tubeIdx}`, {
+            x: fx,
+            y: fy,
+            tubeIdx: s.tubeIdx,
+            cable: pos.guid,
+          });
+        }
       });
     }
   }
@@ -696,7 +936,6 @@ export function drawGeoMeetSchematic(ctx, cx, cy, r, detail, focus, opts = {}) {
   ctx.fillText("N", cx, cy - r * 0.9);
 
   const focused = anyEndpointFocus(focus);
-  const tapTopo = isTap ? tapLightTopology(detail) : null;
 
   // Endpoints that are through-tap (IN/PT) — not ordinary fuse
   /** @type {Set<string>} */
@@ -712,11 +951,46 @@ export function drawGeoMeetSchematic(ctx, cx, cy, r, detail, focus, opts = {}) {
     }
   }
 
-  // ── Fuse bridges (cable↔cable only; skip pure through-tap fibers) ─
+  // ── Intact buffer tubes (ring pass-through) ──────────────────────
+  for (const tube of ring.intactTubes) {
+    const pa = tubePorts.get(`${tube.a}|${tube.tubeIdx}`);
+    const pb = tubePorts.get(`${tube.b}|${tube.tubeIdx}`);
+    if (!pa || !pb) continue;
+    const lit =
+      focus?.tubeIdx === tube.tubeIdx ||
+      (focus?.cable_guid &&
+        (focus.cable_guid === tube.a || focus.cable_guid === tube.b) &&
+        focus.fiber == null);
+    const dim = focused && !lit;
+    drawTubePipe(ctx, pa.x, pa.y, pb.x, pb.y, tube.tubeIdx, lit, dim);
+    // End caps
+    for (const p of [pa, pb]) {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, lit ? 6 : 5, 0, Math.PI * 2);
+      ctx.fillStyle = tiaTubeColor(tube.tubeIdx);
+      ctx.globalAlpha = dim ? 0.15 : 1;
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255,255,255,0.35)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      hits.push({
+        kind: "tube",
+        x: p.x,
+        y: p.y,
+        r: 10,
+        cable_guid: p.cable,
+        tubeIdx: tube.tubeIdx,
+        label: `${tiaTubeName(tube.tubeIdx)} tube`,
+      });
+    }
+  }
+
+  // ── Fuse bridges for broken-out fibers only (skip intact tube fuses) ─
   for (const p of fusePairs) {
+    if (ring.isIntactFuse(p.a.cable, p.a.fiber, p.b.cable, p.b.fiber)) continue;
     const ka = endpointKey(p.a.cable, p.a.fiber);
     const kb = endpointKey(p.b.cable, p.b.fiber);
-    // If both ends are only the tap feed pair, still draw fuse for other fibers
     const pa = fiberPos.get(ka);
     const pb = fiberPos.get(kb);
     if (!pa || !pb) continue;
@@ -727,8 +1001,8 @@ export function drawGeoMeetSchematic(ctx, cx, cy, r, detail, focus, opts = {}) {
     const dim = focused && !lit;
 
     ctx.save();
-    ctx.globalAlpha = dim ? 0.08 : lit ? 1 : 0.4;
-    ctx.strokeStyle = lit ? "rgba(241, 196, 15, 0.95)" : "rgba(93, 173, 226, 0.5)";
+    ctx.globalAlpha = dim ? 0.08 : lit ? 1 : 0.45;
+    ctx.strokeStyle = lit ? "rgba(241, 196, 15, 0.95)" : "rgba(93, 173, 226, 0.55)";
     ctx.lineWidth = lit ? 2.4 : 1.25;
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
@@ -875,23 +1149,32 @@ export function drawGeoMeetSchematic(ctx, cx, cy, r, detail, focus, opts = {}) {
     }
   }
 
-  // ── Trunk stubs (approach only, no clutter) ──────────────────────
+  // ── Cable trunks (sheath) into the enclosure ─────────────────────
   for (const pos of layout.values()) {
     const color = pos.is_drop ? MAG_DROP : MAG_MAINLINE;
+    const thick = pos.is_drop ? 2.2 : Math.min(7, 2.4 + (pos.size || 12) / 48);
     ctx.strokeStyle = color;
-    ctx.globalAlpha = focused ? 0.35 : 0.85;
-    ctx.lineWidth = pos.is_drop ? 1.5 : 2.2;
+    ctx.globalAlpha = focused ? 0.4 : 0.92;
+    ctx.lineWidth = thick;
+    ctx.lineCap = "round";
     if (pos.is_drop) ctx.setLineDash([4, 3]);
     ctx.beginPath();
-    // Orthogonal stub: from enclosure edge to hub
-    const x0 = cx + pos.ux * 14;
-    const y0 = cy + pos.uy * 14;
-    const x1 = pos.x - pos.ux * 10;
-    const y1 = pos.y - pos.uy * 10;
-    // Keep stub radial (true approach unit vectors)
+    // Radial sheath from near enclosure to hub
+    const x0 = cx + pos.ux * (isTap ? 26 : 18);
+    const y0 = cy + pos.uy * (isTap ? 26 : 18);
+    const x1 = pos.x - pos.ux * 4;
+    const y1 = pos.y - pos.uy * 4;
     ctx.moveTo(x0, y0);
     ctx.lineTo(x1, y1);
     ctx.stroke();
+    // Breakout fan mark where tubes/fibers leave the sheath
+    if (!pos.is_drop) {
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.arc(x1, y1, thick * 0.65, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+    }
     ctx.setLineDash([]);
     ctx.globalAlpha = 1;
   }
@@ -972,11 +1255,12 @@ export function drawGeoMeetSchematic(ctx, cx, cy, r, detail, focus, opts = {}) {
     ctx.font = `700 9px system-ui, sans-serif`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(
-      `${compass} ${pos.size || "?"}f`,
-      lx,
-      ly
-    );
+    const nTubes = tubeCountForSize(pos.size);
+    const label =
+      nTubes > 1 && !pos.is_drop
+        ? `${compass} ${pos.size || "?"}f · ${nTubes}T`
+        : `${compass} ${pos.size || "?"}f`;
+    ctx.fillText(label, lx, ly);
     ctx.globalAlpha = 1;
 
     hits.push({
@@ -985,7 +1269,7 @@ export function drawGeoMeetSchematic(ctx, cx, cy, r, detail, focus, opts = {}) {
       y: pos.y,
       r: 14,
       cable_guid: pos.guid,
-      label: `${compass} ${pos.size || "?"}f`,
+      label,
     });
   }
 
@@ -1183,51 +1467,28 @@ export function rgbaToCss(rgba) {
  */
 export function paintMagnifierContent(ctx, cx, cy, rCss, hit, detail, opts = {}) {
   const pan = opts.pan || { x: 0, y: 0 };
-  const zoom = Math.max(0.5, Number(opts.zoom) || 1);
+  const zoom = Math.max(MAGNIFIER_ZOOM_MIN, Number(opts.zoom) || 1);
   const focus = opts.focus || null;
-  let precomputed =
-    opts.precomputed && opts.precomputed.ok ? opts.precomputed : null;
-  let layoutSource = opts.layoutSource || (precomputed ? "wasm" : "js");
+  // Tube breakout / ring-splice drawing is JS-only (upside-down world)
+  let precomputed = null;
+  let layoutSource = "js";
   const title = magnifierTitle(hit, detail);
   const worldScale = MAGNIFIER_WORLD_SCALE * zoom;
   /* Approx body radius before chrome (matches drawLensChrome margins) */
   const bodyRApprox = Math.max(24, rCss - 22);
   const localRApprox = bodyRApprox / worldScale;
-
-  /* P4.11: WASM layout before chrome so footer can show source */
-  if (
-    !precomputed &&
-    opts.layoutService &&
-    detail &&
-    (detail.cables?.length || detail.links?.length)
-  ) {
-    try {
-      const res = opts.layoutService.layout(detail, {
-        cx: 0,
-        cy: 0,
-        radius: localRApprox,
-      });
-      if (res?.ok) {
-        precomputed = res;
-        layoutSource = res.source || "wasm";
-      } else {
-        layoutSource = res?.source === "js" ? "js" : layoutSource;
-      }
-    } catch {
-      layoutSource = "js";
-    }
-  }
+  void localRApprox;
 
   const mode = opts.mode || "inspect";
-  let footer = "scroll/pinch zoom · tap fiber";
+  let footer = "scroll/pinch zoom · tap fiber = path";
   if (hit.sp_guid && (hit.kind === "tap" || hit.kind === "splice")) {
     if (mode === "navigate") {
       footer = "drag glass along plant · hold = inspect";
     } else {
       footer =
-        layoutSource === "wasm"
-          ? "layout:wasm · zoom · tap fiber · hold = move glass"
-          : "zoom strands · tap fiber · hold = move glass";
+        zoom < MAGNIFIER_EXPAND_TUBES_ZOOM
+          ? "tubes collapsed · zoom in for all fibers · tap fiber = path"
+          : "all fibers · tap fiber = full path · hold = move glass";
     }
   } else if (hit.kind === "cable" || hit.kind === "drop") {
     footer = "tap map cable for paths";
@@ -1243,28 +1504,6 @@ export function paintMagnifierContent(ctx, cx, cy, rCss, hit, detail, opts = {})
   ctx.translate(cx - pan.x, bodyCy - pan.y);
   ctx.scale(worldScale, worldScale);
   const localR = bodyR / worldScale;
-
-  /* If exact body radius differs, re-layout once (cached by service) */
-  if (
-    precomputed &&
-    opts.layoutService &&
-    Math.abs(localR - localRApprox) > 0.5 &&
-    detail
-  ) {
-    try {
-      const res = opts.layoutService.layout(detail, {
-        cx: 0,
-        cy: 0,
-        radius: localR,
-      });
-      if (res?.ok) {
-        precomputed = res;
-        layoutSource = res.source || "wasm";
-      }
-    } catch {
-      /* keep prior */
-    }
-  }
 
   if (hit.kind === "cable" || hit.kind === "drop") {
     drawLineCallout(ctx, 0, 0, localR, hit);
@@ -1284,6 +1523,7 @@ export function paintMagnifierContent(ctx, cx, cy, rCss, hit, detail, opts = {})
   ) {
     hits = drawGeoMeetSchematic(ctx, 0, 0, localR, detail, focus, {
       precomputed,
+      zoom,
     });
   } else if (hit.kind === "tap") {
     drawTapEnlarged(ctx, 0, 0, localR, hit);

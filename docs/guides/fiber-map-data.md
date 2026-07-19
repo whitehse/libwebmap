@@ -186,20 +186,25 @@ Directory is large/regenerable and typically gitignored.
 
 ### Magnifier UX (office / tech navigation)
 
-Clean exploratory glass (not a splicer sheet). Cable / drop approaches use
-**true geographic bearings**. Strand color dots sit on each span; fuse pairs
-are drawn as orthogonal midlines with a small × at the splice. The glass is
-centered on a map focus point so it feels like a movable map lens.
+Clean exploratory glass — the **upside-down world** (not a splicer sheet).
+Cable / drop approaches use **true geographic bearings**. The glass is
+centered on a map focus point and can zoom out very far.
+
+**Ring-splice / tube breakout:** intact buffer tubes (pure cable↔cable fuses)
+draw as solid TIA-colored tube pipes. The tube that holds a through-tap or
+drop strand is **broken out** into its fibers (typically 12): the remaining
+strands fuse with × marks, and the pass-through fiber routes through the tap
+(IN → enclosure → PT). Zoom in past ~1.85× to expand all tubes to fibers.
 
 | Action | Result |
 |--------|--------|
-| **Click / tap** splice or tap | Open geo-oriented meet-point glass at that SP |
+| **Click / tap** splice or tap | Open upside-down meet-point glass at that SP |
 | **Double-click** SP (desktop) or **long-press** SP (mobile) | Full HTML splice diagram (splicer sheet) |
-| **Scroll / pinch** inside the glass | Zoom in/out on the schematic world (map zoom unchanged) |
+| **Scroll / pinch** inside the glass | Zoom the upside-down world (map zoom unchanged) |
 | **Drag** in inspect mode | Pan the schematic world under the glass |
 | **Long-press** inside glass (or hold **Space**) | Toggle **navigate** mode — drag moves the glass along the plant |
 | Long-press again (or release Space) | Back to **inspect** (strand pick / zoom) |
-| Tap / click a **fiber chip** | Path-trace that strand (`path_index`) + pair highlight |
+| Tap / click a **fiber chip** | Full path-trace for that strand + **ring all taps/SPs** on the path |
 | Click a **cable hub** | Path list for that cable GUID |
 | Double-click glass (or Alt-click) / Esc | Diagram from glass / close glass |
 

@@ -171,6 +171,8 @@ export function createFiberLayer(opts) {
     memStats = null,
     maxTiles = null,
     layoutService = null,
+    /** @type {(() => string[])|null} SP guids on the active fiber path */
+    getTraceHighlightSps = null,
   } = opts;
   const labelCtx = labelCanvas ? labelCanvas.getContext("2d") : null;
 
@@ -997,6 +999,38 @@ export function createFiberLayer(opts) {
           }
         }
       }
+    }
+
+    // Path-trace: ring every tap/splice on the selected fiber's path
+    /** @type {Set<string>} */
+    const hiSps = new Set();
+    if (typeof getTraceHighlightSps === "function") {
+      try {
+        for (const g of getTraceHighlightSps() || []) {
+          if (g) hiSps.add(String(g).toLowerCase());
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    if (hiSps.size) {
+      labelCtx.save();
+      for (const ht of hitTargets) {
+        if (!ht.sp_guid) continue;
+        if (!hiSps.has(String(ht.sp_guid).toLowerCase())) continue;
+        const rr = (ht.r || rTap) * 1.35;
+        labelCtx.beginPath();
+        labelCtx.arc(ht.px, ht.py, rr, 0, Math.PI * 2);
+        labelCtx.strokeStyle = "rgba(241, 196, 15, 0.95)";
+        labelCtx.lineWidth = Math.max(2.5, dpr * 2);
+        labelCtx.stroke();
+        labelCtx.beginPath();
+        labelCtx.arc(ht.px, ht.py, rr + 4 * dpr, 0, Math.PI * 2);
+        labelCtx.strokeStyle = "rgba(255, 180, 60, 0.45)";
+        labelCtx.lineWidth = Math.max(1.5, dpr);
+        labelCtx.stroke();
+      }
+      labelCtx.restore();
     }
 
     labelCtx.restore();

@@ -17,6 +17,7 @@ import {
   MAGNIFIER_PAN_RANGE_PX,
   MAGNIFIER_ZOOM_MIN,
   MAGNIFIER_ZOOM_MAX,
+  MAGNIFIER_EXPAND_TUBES_ZOOM,
   MAG_BG,
   MAG_RIM,
   MAG_RIM_INNER,
@@ -581,9 +582,23 @@ export function createFiberMagnifier(opts = {}) {
       log(
         `trace fiber f${best.fiber} on ${String(best.cable_guid).slice(0, 8)}…` +
           (best.pair_fiber != null ? ` ↔ f${best.pair_fiber}` : "") +
-          roleTag
+          roleTag +
+          " → full path + taps"
       );
       onTrace(best.cable_guid, best.fiber);
+      requestPaint();
+      return true;
+    }
+    if (best?.kind === "tube" && best.cable_guid) {
+      // Intact tube click: focus that tube; zoom hint for fiber breakout
+      focus = {
+        cable_guid: best.cable_guid,
+        tubeIdx: best.tubeIdx,
+      };
+      log(
+        `${best.label || "tube"} on ${String(best.cable_guid).slice(0, 8)}… · ` +
+          `zoom in (≥${MAGNIFIER_EXPAND_TUBES_ZOOM}×) to break out all 12 fibers`
+      );
       requestPaint();
       return true;
     }

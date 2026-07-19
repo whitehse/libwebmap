@@ -472,10 +472,15 @@ export function createFiberTrace(opts) {
     onChange();
     const budget = buildPathBudget(p);
     const hops = (p.hops || []).slice(0, TRACE_MAX_HOPS_UI);
+    const taps = (p.hops || [])
+      .filter((h) => h.kind === "equipment" && h.sp_guid)
+      .map((h) => h.station_id || String(h.sp_guid).slice(0, 8))
+      .slice(0, 12);
     log(
       `trace path #${pathId} · ${p.hop_count ?? hops.length} hops · ` +
         `end=${p.end_kind || "?"} · loss ${fmtLossDb(budget.total_loss_db)} · ` +
-        `light: start→end · verts=${lonlat.length}`
+        `light: start→end · verts=${lonlat.length}` +
+        (taps.length ? ` · taps/SPs: ${taps.join(" → ")}` : "")
     );
     return true;
   }
@@ -529,11 +534,28 @@ export function createFiberTrace(opts) {
         );
       });
       if (match.length) filtered = match;
+      // Prefer paths whose start fiber matches (light source side)
+      filtered.sort((a, b) => {
+        const pa = pathsById.get(a);
+        const pb = pathsById.get(b);
+        const sa = pa?.start?.fiber === fnum ? 0 : 1;
+        const sb = pb?.start?.fiber === fnum ? 0 : 1;
+        if (sa !== sb) return sa - sb;
+        return (pa?.hop_count ?? 99) - (pb?.hop_count ?? 99);
+      });
     }
 
     candidates = filtered.slice(0, TRACE_MAX_CANDIDATES);
     if (candidates.length === 1) {
       selectPath(candidates[0]);
+    } else if (candidates.length > 1 && Number.isFinite(fnum) && fnum > 0) {
+      // Individual fiber click: auto-select best path so the full plant lights up
+      selectPath(candidates[0]);
+      if (candidates.length > 1) {
+        log(
+          `${candidates.length} paths for f${fnum} — showing #${candidates[0]} (pick another in list)`
+        );
+      }
     } else {
       selectedPathId = null;
       destroyHighlight();
@@ -546,6 +568,46 @@ export function createFiberTrace(opts) {
       );
     }
     return true;
+  }
+
+  /**
+   * Splicepoint / tap GUIDs along the selected path (equipment hops).
+   * Used to ring-highlight associated plant on the map.
+   * @returns {string[]}
+   */
+  function getHighlightedSpGuids() {
+    if (selectedPathId == null || !pathsById) return [];
+    const p = pathsById.get(selectedPathId);
+    if (!p) return [];
+    /** @type {Set<string>} */
+    const out = new Set();
+    for (const h of p.hops || []) {
+      if (h.kind === "equipment" && h.sp_guid) {
+        out.add(String(h.sp_guid).toLowerCase());
+      }
+    }
+    return [...out];
+  }
+
+  /**
+   * Station labels for highlighted equipment hops (logging / UI).
+   * @returns {Array<{sp_guid:string, station_id?:string, port?:string, role?:string}>}
+   */
+  function getHighlightedEquipment() {
+    if (selectedPathId == null || !pathsById) return [];
+    const p = pathsById.get(selectedPathId);
+    if (!p) return [];
+    const rows = [];
+    for (const h of p.hops || []) {
+      if (h.kind !== "equipment" || !h.sp_guid) continue;
+      rows.push({
+        sp_guid: String(h.sp_guid),
+        station_id: h.station_id,
+        port: h.port_name,
+        role: h.port_name_type,
+      });
+    }
+    return rows;
   }
 
   /** Convenience: same as selectByCable(guid, fiber). */
@@ -574,6 +636,8 @@ export function createFiberTrace(opts) {
     halfWidthForDraw,
     refreshMemStats,
     getMemReport,
+    getHighlightedSpGuids,
+    getHighlightedEquipment,
     get enabled() {
       return enabled;
     },

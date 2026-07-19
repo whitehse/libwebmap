@@ -147,12 +147,21 @@ export const MAGNIFIER_PAN_RANGE_PX = 110;
 export const MAGNIFIER_WORLD_SCALE = 1.35;
 
 /**
- * In-glass zoom limits (wheel while pointer is in the magnifier).
- * Min is low enough that large multi-cable / many-fiber SPs (144–288f)
- * fit entirely in the glass; max still allows strand-level inspection.
+ * In-glass zoom limits for the "upside-down world" (meet-point glass).
+ * Min is very low so the whole plant around a SP can sit in the lens;
+ * max still allows individual-fiber inspection after tube breakout.
  */
-export const MAGNIFIER_ZOOM_MIN = 0.16;
-export const MAGNIFIER_ZOOM_MAX = 5.5;
+export const MAGNIFIER_ZOOM_MIN = 0.05;
+export const MAGNIFIER_ZOOM_MAX = 8.0;
+
+/** Standard plant packing (TIA): fibers per buffer tube. */
+export const FIBERS_PER_TUBE = 12;
+
+/**
+ * Zoom at/above which intact pass-through tubes expand to individual fibers
+ * so every strand is clickable for path-trace.
+ */
+export const MAGNIFIER_EXPAND_TUBES_ZOOM = 1.85;
 
 /**
  * Max fibers drawn per cable rail in the magnifier schematic.
@@ -207,6 +216,35 @@ export function tiaFiberName(fiberNum) {
 export function tiaFiberIsLight(fiberNum) {
   const i = Math.max(0, ((fiberNum || 1) - 1) % 12);
   return i === 5 || i === 8;
+}
+
+/** 0-based tube index from 1-based fiber number (12f tubes). */
+export function fiberTubeIndex(fiberNum) {
+  return Math.floor((Math.max(1, Number(fiberNum) || 1) - 1) / FIBERS_PER_TUBE);
+}
+
+/** 1-based strand within tube (1…12). */
+export function fiberInTube(fiberNum) {
+  return ((Math.max(1, Number(fiberNum) || 1) - 1) % FIBERS_PER_TUBE) + 1;
+}
+
+/** 0-based tube index → TIA buffer-tube color (Blue, Orange, …). */
+export function tiaTubeColor(tubeIndex0) {
+  const i = ((Number(tubeIndex0) || 0) % 12 + 12) % 12;
+  return TIA_HEX[i];
+}
+
+/** 0-based tube index → TIA name. */
+export function tiaTubeName(tubeIndex0) {
+  const i = ((Number(tubeIndex0) || 0) % 12 + 12) % 12;
+  return TIA_NAMES[i];
+}
+
+/** How many complete tubes a cable size implies. */
+export function tubeCountForSize(size) {
+  const n = Math.max(0, Math.floor(Number(size) || 0));
+  if (n <= 0) return 0;
+  return Math.ceil(n / FIBERS_PER_TUBE);
 }
 
 /* Magnifier accent colors — from glass_tokens.js (single palette). */

@@ -2055,8 +2055,10 @@ async function tryWasm() {
           log("Path index not available for this package");
           return;
         }
+        // Individual fiber → full path geometry + all associated taps/SPs
         fiberTrace.selectByCable(guid || "", fiber);
       },
+      getTraceHighlightSps: () => fiberTrace?.getHighlightedSpGuids?.() || [],
       // onOpenDiagram omitted — layer opens diagrams_url HTML via diagram index
       requestPaint: () => {
         /* paintSymbols runs every frame; magnifier state is read there */
@@ -2174,8 +2176,8 @@ async function tryWasm() {
         " · schematic " +
         (schematicLayout?.hasWasm ? "wasm" : "js") +
         " · " +
-        "click SP=glass · dbl-click/hold SP=diagram · scroll/pinch=zoom glass · " +
-        "hold glass=move · Space=navigate · click fiber=trace · Esc=close · z≥" +
+        "click SP=glass (upside-down) · tubes pass-through · zoom-in breaks out · " +
+        "tap fiber=full path+taps · hold glass=move · Esc=close · z≥" +
         fiberTapZmin
     );
     lastFrameT = performance.now();
